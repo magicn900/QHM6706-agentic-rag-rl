@@ -189,3 +189,6 @@ third_party_integration/lightrag_integration/temp/
 
 # Third-party integration local secrets
 third_party_integration/lightrag_integration/.env
+
+# vscode settings
+.vscode/

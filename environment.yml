@@ -1,0 +1,72 @@
+name: agentic-rl
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=2.6.*
+  - torchvision=0.21.*
+  - numpy=1.26.*
+  - pandas=2.2.*
+  - pip
+  - pyyaml
+  - tqdm
+  - filelock
+  - packaging
+  - jinja2
+  - psutil
+  - requests
+  - regex
+
+  - pip:
+    - transformers==4.57.1
+    - trl==0.13.0
+    - datasets==3.6.0
+    - accelerate==1.12.0
+    - peft==0.7.1
+    - sentence-transformers==2.3.1
+    - openai==1.59.6
+    - wandb==0.18.3
+    - swanlab==0.6.8
+    - streamlit==1.50.0
+    - flask==3.0.3
+    - flask-cors==4.0.0
+    - scikit-learn==1.5.1
+    - matplotlib==3.10.0
+    - jieba==0.42.1
+    - nltk==3.8
+    - tiktoken==0.10.0
+    - einops==0.8.1
+    - simhash==2.1.2
+    - datasketch==1.6.4
+    - marshmallow==3.22.0
+    - pydantic==2.11.5
+    - ujson==5.1.0
+    - jsonlines==4.0.0
+    - rich==13.9.4
+    - ngrok==1.4.0
+    - safetensors==0.7.0
+    - tokenizers==0.22.2
+    - huggingface-hub>=0.34.0,<1.0
+    - unsloth; platform_system != "Windows"
+    - vllm; platform_system != "Windows"
+    - typing-extensions
+    - colorama
+    - mdurl
+    - click
+    - typer
+    - shellingham
+    - smart-open
+    - blis
+    - catalogue
+    - confection
+    - cymem
+    - langcodes
+    - murmurhash
+    - preshed
+    - srsly
+    - thinc
+    - wasabi
+    - weasel
