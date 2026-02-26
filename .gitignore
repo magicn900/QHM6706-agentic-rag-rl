@@ -183,3 +183,9 @@ cython_debug/
 
 # Example code
 ExampleCode/
+
+# Third-party integration runtime artifacts
+third_party_integration/lightrag_integration/temp/
+
+# Third-party integration local secrets
+third_party_integration/lightrag_integration/.env
