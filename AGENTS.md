@@ -6,12 +6,14 @@ This file must be continuously updated as project constraints evolve.
 ## Scope and Ownership
 - Treat `LightRAG/` as third-party upstream code.
 - Do not modify files inside `LightRAG/` unless the user explicitly asks.
+- Build project-owned core environment and RL-facing abstractions in `agentic_rag_rl/`.
 - Put local integration code in `third_party_integration/lightrag_integration/`.
   - `wrappers/`: adapter and integration methods
   - `scripts/`: smoke tests and runnable checks
   - `docs/`: integration docs and runbooks
 - Main project orchestration code must not import from `LightRAG/` directly.
 - Main project should depend on integration contracts/factories only (for example, `create_lightrag_adapter*` and contract types).
+- Treat LightRAG integration as one provider implementation of the core environment, not the environment layer itself.
 
 ## Environment Policy
 - Use conda environment: `agentic-rl`.
