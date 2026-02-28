@@ -195,3 +195,9 @@ agentic_rag_rl/temp/
 
 # vscode settings
 .vscode/
+
+# github copilot settings
+.github/
+
+# data files
+data/

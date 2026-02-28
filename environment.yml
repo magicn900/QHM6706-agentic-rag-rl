@@ -70,3 +70,6 @@ dependencies:
     - thinc
     - wasabi
     - weasel
+    - json_repair
+    - pipmaster
+    - nano_vectordb

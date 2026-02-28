@@ -45,3 +45,59 @@ This file must be continuously updated as project constraints evolve.
 - When integration behavior changes, update docs in the same PR.
 - Keep this file synchronized with the latest workflow and constraints.
 - If a new constraint appears in chat, add it here as a durable rule.
+
+---
+
+## 架构重构要求
+
+> **关键文档**：`docs/freebase_rebuild_guide.md` 是架构变更的权威来源。
+> **AI开发纪律**：废弃即删除，严禁叠加补丁。所有变更以rebuild文档为准。
+
+### 当前状态
+项目当前基于 **relation_select（关系选择）** 模式实现，需要迁移到 **edge_select（边选择）** 模式。
+
+### 核心变革点（来自rebuild文档）
+
+| 当前实现 | 目标架构 | 说明 |
+|---------|---------|------|
+| `relation_select` (关系名) | `edge_select` (完整边) | Agent选择`A -关系-> B`而非仅关系名 |
+| `<relation_set>` 提示词 | `<candidate_edges>` 提示词 | LLM看到完整边信息 |
+| `RelationEnvAction` | `EdgeEnvAction` | 动作类型重构 |
+| 无噪音过滤 | Freebase黑名单过滤 | 过滤`type.object.*`、`kg.*`等系统关系 |
+| 无MID处理 | MID双轨制(Freebase) | 内部MID，外部可读名称 |
+| LightRAG单一数据源 | 多数据源可插拔 | Freebase通过外部HTTP服务对接 |
+
+### 数据源架构
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Env (agentic_rag_rl/envs/)                                 │
+│    ↓ 统一接口                                                │
+│  Provider (agentic_rag_rl/providers/)                       │
+│    ↓ GraphAdapterProtocol                                   │
+│  Integration (third_party_integration/)                     │
+│    ├── lightrag_integration/  (LightRAG内部调用)            │
+│    └── freebase_integration/  (HTTP: localhost:8000/8890)  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Freebase外部服务接口
+- **实体向量召回**：`POST http://localhost:8000/search`
+  - Payload: `{"query": "搜索词", "top_k": 5}`
+  - Response: `{"results": [{"name": "实体名", "freebase_ids": ["m.xxx"]}]}`
+- **SPARQL图扩展**：`GET http://localhost:8890/sparql`
+  - Params: `query=URL编码SPARQL&format=application/sparql-results+json`
+
+### 模块职责边界
+- **Env层**：过滤逻辑、文本拼接、图剪枝。禁止调用LLM。
+- **Policy层**：提示词构建、XML解析。禁止拼装SPARQL。
+- **Integration层**：HTTP调用、异常处理、超时重试、MID映射。
+
+### 子模块AGENTS.md导航
+- [agentic_rag_rl/](agentic_rag_rl/AGENTS.md) - 核心包总览
+- [agentic_rag_rl/envs/](agentic_rag_rl/envs/AGENTS.md) - 环境层
+- [agentic_rag_rl/policies/](agentic_rag_rl/policies/AGENTS.md) - 策略层
+- [agentic_rag_rl/prompts/](agentic_rag_rl/prompts/AGENTS.md) - 提示词层
+- [agentic_rag_rl/providers/](agentic_rag_rl/providers/AGENTS.md) - 提供者层
+- [agentic_rag_rl/contracts/](agentic_rag_rl/contracts/AGENTS.md) - 合约层
+- [agentic_rag_rl/config/](agentic_rag_rl/config/AGENTS.md) - 配置层
+- [third_party_integration/](third_party_integration/AGENTS.md) - 集成层
