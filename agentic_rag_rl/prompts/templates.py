@@ -1,44 +1,66 @@
 from __future__ import annotations
 
+from agentic_rag_rl.contracts import CandidateEdge
+
+# ========== System & Format Prompts ==========
 SYSTEM_PROMPT = "你是一个在知识图上进行多路径推理的智能助手。"
 ACTION_FORMAT_PROMPT = (
-    "输出必须先给<think>，然后给一个动作："
-    "<relation_select>关系名</relation_select> 或 <answer>答案</answer>。"
+    "输出必须先在<think></think>中进行逻辑推理，然后给一个动作："
+    "<edge_select>边1; 边2; ...</edge_select> 或 <answer>答案</answer>。\n"
+    "边的格式为：实体A -关系-> 实体B\n"
+    "如需选择多条边，用分号(;)分隔每条边，可选1-3条。"
 )
-RELATION_CONSTRAINT_PROMPT = "只能从<relation_set>里选择关系。"
-DECISION_HINT_PROMPT = "如果信息还不足请选关系扩展；如果足够请直接回答。"
+EDGE_CONSTRAINT_PROMPT = "只能从<candidate_edges>里选择一条或多条边。多条边用分号(;)分隔。"
+DECISION_HINT_PROMPT = "如果信息还不足请选边扩展（建议1-3条）；如果足够请直接回答。"
 
+# ========== Knowledge Block Templates ==========
 EMPTY_KNOWLEDGE = "<knowledge>当前无活跃路径。</knowledge>"
 KNOWLEDGE_BLOCK_TEMPLATE = "<knowledge>\n{body}\n</knowledge>"
-RELATION_SET_TEMPLATE = "<relation_set>{relations}</relation_set>"
+CANDIDATE_EDGES_TEMPLATE = "<candidate_edges>\n{edges}\n</candidate_edges>"
 
-RELATION_SELECT_REGEX = r"<relation_select>(.*?)</relation_select>"
+# ========== Regex Patterns ==========
+EDGE_SELECT_REGEX = r"<edge_select>(.*?)</edge_select>"
 ANSWER_REGEX = r"<answer>(.*?)</answer>"
+THINK_REGEX = r"<think>(.*?)</think>"
 
-MANUAL_INPUT_PROMPT = "输入关系名（或输入 answer:你的答案）："
+# ========== Fallback & Manual Input Templates ==========
+MANUAL_INPUT_PROMPT = "输入边编号或 answer:你的答案："
 THINK_MANUAL_ANSWER = "<think>manual answer</think>"
-THINK_MANUAL_SELECT_TEMPLATE = "<think>manual select relation: {relation}</think>"
-THINK_HEURISTIC_SELECT_TEMPLATE = "<think>heuristic select first relation: {relation}</think>"
+THINK_MANUAL_SELECT_TEMPLATE = "<think>manual select edge: {edge}</think>"
+THINK_HEURISTIC_SELECT_TEMPLATE = "<think>heuristic select first edge: {edge}</think>"
 THINK_HEURISTIC_FALLBACK_ANSWER = "<think>heuristic fallback to provider answer</think>"
-THINK_PARSE_FALLBACK_TEMPLATE = "<think>无法解析标准标签，回退选择首个关系：{relation}</think>"
-THINK_EMPTY_RELATION_FALLBACK = "<think>候选关系为空，回退回答。</think>"
+THINK_PARSE_FALLBACK_TEMPLATE = "<think>无法解析标准标签，回退选择首个边：{edge}</think>"
+THINK_EMPTY_EDGE_FALLBACK = "<think>候选边为空，回退回答。</think>"
+
+
+def format_candidate_edges(candidate_edges: list[CandidateEdge]) -> str:
+    """将候选边渲染为<candidate_edges>内部列表文本（与预期输出一致）"""
+    if not candidate_edges:
+        return "（无候选边）"
+    lines = []
+    for edge in candidate_edges:
+        lines.append(f"- {edge.to_display_text()}")
+    return CANDIDATE_EDGES_TEMPLATE.format(edges="\n".join(lines))
 
 
 def format_relation_set(relation_set: list[str]) -> str:
-    return RELATION_SET_TEMPLATE.format(relations=", ".join(relation_set))
+    """遗留函数，保持向后兼容"""
+    return "<relation_set>" + ", ".join(relation_set) + "</relation_set>"
 
 
-def build_action_prompt(*, question: str, knowledge: str, relation_set: list[str]) -> str:
+def build_action_prompt(*, question: str, knowledge: str, candidate_edges: list[CandidateEdge]) -> str:
+    """构造给 Agent 的完整提示词（Edge-Select模式）"""
     return (
-        f"{SYSTEM_PROMPT}"
-        f"{ACTION_FORMAT_PROMPT}"
-        f"{RELATION_CONSTRAINT_PROMPT}\n\n"
-        f"问题：{question}\n"
-        f"{knowledge}\n"
-        f"{format_relation_set(relation_set)}\n"
+        f"{SYSTEM_PROMPT}\n"
+        f"{ACTION_FORMAT_PROMPT}\n"
+        f"{EDGE_CONSTRAINT_PROMPT}\n\n"
+        f"问题：{question}\n\n"
+        f"{knowledge}\n\n"
+        f"{format_candidate_edges(candidate_edges)}\n\n"
         f"{DECISION_HINT_PROMPT}"
     )
 
 
 def format_knowledge_body(lines: list[str]) -> str:
+    """将knowledge行列表拼装为<knowledge>块"""
     return KNOWLEDGE_BLOCK_TEMPLATE.format(body="\n".join(lines))

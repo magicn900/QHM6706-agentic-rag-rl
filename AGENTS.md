@@ -54,7 +54,7 @@ This file must be continuously updated as project constraints evolve.
 | Phase | 状态 | 说明 |
 |-------|------|------|
 | A | ✅ | 类型定义、协议、配置 |
-| B | ⏳ | Prompt/Policy迁移 |
+| B | ✅ | Prompt/Policy迁移（已完成模拟测试验证） |
 | C | ⏳ | Env主链路替换 |
 
 ---

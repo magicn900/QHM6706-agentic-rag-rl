@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from openai import AsyncOpenAI
 
 from ..config import CoreAPIConfig
-from ..contracts import RelationEnvAction, RelationEnvState
+from ..contracts import CandidateEdge, EdgeEnvAction, EdgeEnvState
 from ..prompts import (
     ANSWER_REGEX,
-    RELATION_SELECT_REGEX,
-    THINK_EMPTY_RELATION_FALLBACK,
+    EDGE_SELECT_REGEX,
+    THINK_EMPTY_EDGE_FALLBACK,
     THINK_PARSE_FALLBACK_TEMPLATE,
     build_action_prompt,
 )
@@ -36,15 +37,53 @@ class OpenAIActionPolicy:
         self.temperature = temperature
         self.client = AsyncOpenAI(base_url=resolved_base_url, api_key=resolved_api_key)
 
-    async def decide(self, state: RelationEnvState) -> tuple[RelationEnvAction, str]:
+    def _parse_edge_selection(
+        self, raw_text: str, candidate_edges: list[CandidateEdge]
+    ) -> list[CandidateEdge]:
+        """解析边选择文本，返回匹配的CandidateEdge列表（支持多选，用分号分隔）"""
+        raw_text = raw_text.strip()
+        
+        # 处理多选：用分号分割
+        edge_texts = [e.strip() for e in raw_text.split(";") if e.strip()]
+        
+        if not edge_texts:
+            return []
+        
+        # 如果只有一个元素且是数字，处理单选
+        if len(edge_texts) == 1 and edge_texts[0].isdigit():
+            idx = int(edge_texts[0]) - 1  # 转换为0-based
+            if 0 <= idx < len(candidate_edges):
+                return [candidate_edges[idx]]
+            return []
+        
+        # 匹配每个边文本
+        matched_edges: list[CandidateEdge] = []
+        for edge_text in edge_texts:
+            # 优先精确匹配
+            for edge in candidate_edges:
+                if edge.to_display_text() == edge_text:
+                    matched_edges.append(edge)
+                    break
+            else:
+                # 尝试部分匹配
+                for edge in candidate_edges:
+                    if edge_text in edge.to_display_text():
+                        matched_edges.append(edge)
+                        break
+        
+        return matched_edges
+
+    async def decide(self, state: EdgeEnvState) -> tuple[EdgeEnvAction, str]:
+        """根据环境状态决定下一步动作"""
         action, content, _trace = await self.decide_with_trace(state)
         return action, content
 
-    async def decide_with_trace(self, state: RelationEnvState) -> tuple[RelationEnvAction, str, dict[str, str]]:
+    async def decide_with_trace(self, state: EdgeEnvState) -> tuple[EdgeEnvAction, str, dict[str, Any]]:
+        """根据环境状态决定下一步动作（带trace）"""
         prompt = build_action_prompt(
             question=state.question,
             knowledge=state.knowledge,
-            relation_set=state.relation_set,
+            candidate_edges=state.candidate_edges,
         )
 
         response = await self.client.chat.completions.create(
@@ -54,23 +93,32 @@ class OpenAIActionPolicy:
         )
         content = response.choices[0].message.content or ""
 
-        relation_match = re.search(RELATION_SELECT_REGEX, content, flags=re.DOTALL)
+        # 尝试解析 edge_select 标签
+        edge_match = re.search(EDGE_SELECT_REGEX, content, flags=re.DOTALL)
+        
+        # 尝试解析 answer 标签
         answer_match = re.search(ANSWER_REGEX, content, flags=re.DOTALL)
 
-        if relation_match:
-            relation = relation_match.group(1).strip()
-            if relation in state.relation_set:
-                action = RelationEnvAction.select_relation(relation)
+        if edge_match:
+            raw_edges = edge_match.group(1).strip()
+            selected_edges = self._parse_edge_selection(raw_edges, state.candidate_edges)
+            
+            if selected_edges:
+                # 多选：用分号连接所有边的显示文本
+                edge_texts = "; ".join(e.to_display_text() for e in selected_edges)
+                action = EdgeEnvAction.select_edge(edge_texts)
+                edge_ids = [e.edge_id for e in selected_edges]
                 return action, content, {
                     "prompt": prompt,
                     "model_output": content,
-                    "action_type": "relation_select",
-                    "action_value": relation,
+                    "action_type": "edge_select",
+                    "action_value": edge_texts,
+                    "edge_ids": edge_ids,
                 }
 
         if answer_match:
             answer = answer_match.group(1).strip()
-            action = RelationEnvAction.answer_now(answer)
+            action = EdgeEnvAction.answer_now(answer)
             return action, content, {
                 "prompt": prompt,
                 "model_output": content,
@@ -78,20 +126,23 @@ class OpenAIActionPolicy:
                 "action_value": answer,
             }
 
-        fallback_relation = state.relation_set[0] if state.relation_set else ""
-        if fallback_relation:
-            fallback_think = THINK_PARSE_FALLBACK_TEMPLATE.format(relation=fallback_relation)
-            action = RelationEnvAction.select_relation(fallback_relation)
+        # 回退逻辑：优先尝试选择第一个候选边
+        if state.candidate_edges:
+            fallback_edge = state.candidate_edges[0]
+            fallback_think = THINK_PARSE_FALLBACK_TEMPLATE.format(edge=fallback_edge.to_display_text())
+            action = EdgeEnvAction.select_edge(fallback_edge.to_display_text())
             return action, fallback_think, {
                 "prompt": prompt,
                 "model_output": content,
-                "action_type": "relation_select_fallback",
-                "action_value": fallback_relation,
+                "action_type": "edge_select_fallback",
+                "action_value": fallback_edge.to_display_text(),
+                "edge_ids": [fallback_edge.edge_id],
             }
 
+        # 无候选边，回退到回答
         fallback_answer = "信息不足，暂无法确定答案。"
-        action = RelationEnvAction.answer_now(fallback_answer)
-        return action, THINK_EMPTY_RELATION_FALLBACK, {
+        action = EdgeEnvAction.answer_now(fallback_answer)
+        return action, THINK_EMPTY_EDGE_FALLBACK, {
             "prompt": prompt,
             "model_output": content,
             "action_type": "answer_fallback",

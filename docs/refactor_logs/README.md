@@ -17,7 +17,7 @@
 | Phase | 状态 | 日志文件 |
 |-------|------|----------|
 | A - 类型与接口骨架 | ✅ 完成 | [phase_a.md](./phase_a.md) |
-| B - Prompt与Policy迁移 | ⏳ 待开始 | phase_b.md |
+| B - Prompt与Policy迁移 | ✅ 完成 | [phase_b.md](./phase_b.md) |
 | C - Env主链路替换 | ⏳ 待开始 | phase_c.md |
 
 ---
