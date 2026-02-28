@@ -57,6 +57,7 @@ This file must be continuously updated as project constraints evolve.
 | B | ✅ | Prompt/Policy迁移（已完成模拟测试验证） |
 | C | ✅ | Env主链路替换（已完成集成测试验证） |
 | D | ✅ | Provider适配（已完成集成测试验证） |
+| E | ✅ | Freebase外部服务集成（已完成集成测试验证） |
 
 ---
 
