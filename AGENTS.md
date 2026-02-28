@@ -45,6 +45,17 @@ This file must be continuously updated as project constraints evolve.
 - When integration behavior changes, update docs in the same PR.
 - Keep this file synchronized with the latest workflow and constraints.
 - If a new constraint appears in chat, add it here as a durable rule.
+- For project-owned code, every new/modified class and method must include concise chinese functional comments/docstrings describing purpose, inputs/outputs, and boundary assumptions to reduce ambiguity for low-context models.
+
+## 重构日志索引
+
+> Edge-Select重构进度追踪，详见 [docs/refactor_logs/README.md](docs/refactor_logs/README.md)
+
+| Phase | 状态 | 说明 |
+|-------|------|------|
+| A | ✅ | 类型定义、协议、配置 |
+| B | ⏳ | Prompt/Policy迁移 |
+| C | ⏳ | Env主链路替换 |
 
 ---
 
