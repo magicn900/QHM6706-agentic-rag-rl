@@ -59,6 +59,7 @@ This file must be continuously updated as project constraints evolve.
 | D | ✅ | Provider适配（已完成集成测试验证） |
 | E | ✅ | Freebase外部服务集成（已完成集成测试验证） |
 | F | ✅ | 迁移完成与清理（已删除旧relation链路，完成全部测试验证） |
+| G | ✅ | 文档与验收（AGENTS同步、runbook、edge smoke脚本） |
 
 ---
 
@@ -68,18 +69,18 @@ This file must be continuously updated as project constraints evolve.
 > **AI开发纪律**：废弃即删除，严禁叠加补丁。所有变更以rebuild文档为准。
 
 ### 当前状态
-项目当前基于 **relation_select（关系选择）** 模式实现，需要迁移到 **edge_select（边选择）** 模式。
+项目主链路已完成 **edge_select（边选择）** 架构，`relation_select` 已退出可执行主链路。
 
 ### 核心变革点（来自rebuild文档）
 
-| 当前实现 | 目标架构 | 说明 |
-|---------|---------|------|
-| `relation_select` (关系名) | `edge_select` (完整边) | Agent选择`A -关系-> B`而非仅关系名 |
-| `<relation_set>` 提示词 | `<candidate_edges>` 提示词 | LLM看到完整边信息 |
-| `RelationEnvAction` | `EdgeEnvAction` | 动作类型重构 |
-| 无噪音过滤 | Freebase黑名单过滤 | 过滤`type.object.*`、`kg.*`等系统关系 |
-| 无MID处理 | MID双轨制(Freebase) | 内部MID，外部可读名称 |
-| LightRAG单一数据源 | 多数据源可插拔 | Freebase通过外部HTTP服务对接 |
+| 已落地能力 | 说明 |
+|---------|------|
+| `edge_select` (完整边) | Agent选择`A -关系-> B`，支持多边分号分隔 |
+| `<candidate_edges>` 提示词 | Policy 对 Agent 只暴露可读边文本 |
+| `EdgeEnvAction` / `EdgeEnvState` | 合约、Prompt、Policy、Env 全链路统一 |
+| Freebase集成可插拔 | 通过 provider factory 在 `lightrag/freebase` 间切换 |
+| 外部服务对接 | `POST /search` + `GET /sparql` 封装在 integration 层 |
+| 异常回退 | 外部请求失败返回空候选，不中断 episode |
 
 ### 数据源架构
 ```

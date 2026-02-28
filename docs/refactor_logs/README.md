@@ -22,6 +22,7 @@
 | D - Provider适配 | ✅ 完成 | [phase_d.md](./phase_d.md) |
 | E - Freebase外部服务集成 | ✅ 完成 | [phase_e.md](./phase_e.md) |
 | F - 迁移完成与清理 | ✅ 完成 | [phase_f.md](./phase_f.md) |
+| G - 文档与验收 | ✅ 完成 | [phase_g.md](./phase_g.md) |
 
 ---
 
