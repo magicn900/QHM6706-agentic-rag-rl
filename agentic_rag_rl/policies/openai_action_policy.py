@@ -109,6 +109,10 @@ class OpenAIActionPolicy:
                 action = EdgeEnvAction.select_edge(edge_texts)
                 edge_ids = [e.edge_id for e in selected_edges]
                 return action, content, {
+                    "agent_prompt": prompt,
+                    "agent_raw_response": content,
+                    "agent_action_type": "edge_select",
+                    "agent_action_value": edge_texts,
                     "prompt": prompt,
                     "model_output": content,
                     "action_type": "edge_select",
@@ -120,6 +124,10 @@ class OpenAIActionPolicy:
             answer = answer_match.group(1).strip()
             action = EdgeEnvAction.answer_now(answer)
             return action, content, {
+                "agent_prompt": prompt,
+                "agent_raw_response": content,
+                "agent_action_type": "answer",
+                "agent_action_value": answer,
                 "prompt": prompt,
                 "model_output": content,
                 "action_type": "answer",
@@ -132,6 +140,10 @@ class OpenAIActionPolicy:
             fallback_think = THINK_PARSE_FALLBACK_TEMPLATE.format(edge=fallback_edge.to_display_text())
             action = EdgeEnvAction.select_edge(fallback_edge.to_display_text())
             return action, fallback_think, {
+                "agent_prompt": prompt,
+                "agent_raw_response": content,
+                "agent_action_type": "edge_select_fallback",
+                "agent_action_value": fallback_edge.to_display_text(),
                 "prompt": prompt,
                 "model_output": content,
                 "action_type": "edge_select_fallback",
@@ -143,6 +155,10 @@ class OpenAIActionPolicy:
         fallback_answer = "信息不足，暂无法确定答案。"
         action = EdgeEnvAction.answer_now(fallback_answer)
         return action, THINK_EMPTY_EDGE_FALLBACK, {
+            "agent_prompt": prompt,
+            "agent_raw_response": content,
+            "agent_action_type": "answer_fallback",
+            "agent_action_value": fallback_answer,
             "prompt": prompt,
             "model_output": content,
             "action_type": "answer_fallback",

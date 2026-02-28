@@ -1,9 +1,5 @@
 from .types import (
     PathTrace,
-    RelationEdge,
-    RelationEnvAction,
-    RelationEnvState,
-    RelationOption,
     SeedSnapshot,
     StepResult,
     # Edge-Select 新类型
@@ -18,10 +14,6 @@ from .graph_adapter import (
 
 __all__ = [
     "PathTrace",
-    "RelationEdge",
-    "RelationEnvAction",
-    "RelationEnvState",
-    "RelationOption",
     "SeedSnapshot",
     "StepResult",
     # Edge-Select 新类型

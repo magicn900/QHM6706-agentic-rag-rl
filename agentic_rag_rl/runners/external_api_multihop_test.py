@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from ..config import CoreAPIConfig
-from ..contracts import RelationEnvAction
-from ..envs import RelationSelectionEnv
+from ..contracts import EdgeEnvAction
+from ..envs import EdgeSelectionEnv
 from ..policies import OpenAIActionPolicy
-from ..prompts import format_relation_set
+from ..prompts import format_candidate_edges
 from ..providers import create_lightrag_graph_provider_from_env
 
 DEFAULT_KG_TEXTS = [
@@ -94,7 +94,7 @@ async def run_test(args: argparse.Namespace) -> int:
         use_mock=args.use_mock,
         default_mode=args.mode,
     )
-    env = RelationSelectionEnv(
+    env = EdgeSelectionEnv(
         provider=provider,
         beam_width=args.beam_width,
         max_steps=args.max_steps,
@@ -154,13 +154,14 @@ async def run_test(args: argparse.Namespace) -> int:
         state = await env.reset(args.question)
         logs["initial_state"] = {
             "knowledge": state.knowledge,
-            "relation_set": list(state.relation_set),
+            "candidate_edges": [edge.to_display_text() for edge in state.candidate_edges],
+            "candidate_edges_length": len(state.candidate_edges),
             "active_path_count": len(state.active_paths),
         }
 
         print("[INFO] Initial state")
         print(state.knowledge)
-        print(format_relation_set(state.relation_set))
+        print(format_candidate_edges(state.candidate_edges))
 
         for _ in range(args.max_steps + 1):
             if args.policy == "llm":
@@ -168,25 +169,25 @@ async def run_test(args: argparse.Namespace) -> int:
                     raise RuntimeError("LLM policy is not initialized.")
                 action, reasoning, trace = await policy.decide_with_trace(state)
             else:
-                if state.relation_set and state.step_index < args.max_steps:
-                    selected = state.relation_set[0]
-                    action = RelationEnvAction.select_relation(selected)
-                    reasoning = f"<think>heuristic select first relation: {selected}</think>"
+                if state.candidate_edges and state.step_index < args.max_steps:
+                    selected = state.candidate_edges[0].to_display_text()
+                    action = EdgeEnvAction.select_edge(selected)
+                    reasoning = f"<think>heuristic select first edge: {selected}</think>"
                     trace = {
-                        "prompt": "",
-                        "model_output": "",
-                        "action_type": "heuristic_relation_select",
-                        "action_value": selected,
+                        "agent_prompt": "",
+                        "agent_raw_response": "",
+                        "agent_action_type": "heuristic_edge_select",
+                        "agent_action_value": selected,
                     }
                 else:
                     auto_answer = await provider.answer(state.question, mode=args.mode)
-                    action = RelationEnvAction.answer_now(auto_answer)
+                    action = EdgeEnvAction.answer_now(auto_answer)
                     reasoning = "<think>heuristic fallback to provider answer</think>"
                     trace = {
-                        "prompt": "",
-                        "model_output": "",
-                        "action_type": "heuristic_answer",
-                        "action_value": auto_answer,
+                        "agent_prompt": "",
+                        "agent_raw_response": "",
+                        "agent_action_type": "heuristic_answer",
+                        "agent_action_value": auto_answer,
                     }
             step_result = await env.step(action)
 
@@ -196,22 +197,24 @@ async def run_test(args: argparse.Namespace) -> int:
                 "state_context": {
                     "question": state.question,
                     "knowledge": state.knowledge,
-                    "relation_set": list(state.relation_set),
+                    "candidate_edges": [edge.to_display_text() for edge in state.candidate_edges],
+                    "candidate_edges_length": len(state.candidate_edges),
                     "history": list(state.history),
                 },
-                "llm_context_prompt": trace.get("prompt", ""),
-                "llm_raw_output": trace.get("model_output", ""),
+                "agent_prompt": trace.get("agent_prompt", trace.get("prompt", "")),
+                "agent_raw_response": trace.get("agent_raw_response", trace.get("model_output", "")),
                 "parsed_reasoning": reasoning,
                 "action": {
-                    "type": trace.get("action_type", "unknown"),
-                    "value": trace.get("action_value", ""),
+                    "type": trace.get("agent_action_type", trace.get("action_type", "unknown")),
+                    "value": trace.get("agent_action_value", trace.get("action_value", "")),
                 },
                 "env_feedback": {
                     "reward": step_result.reward,
                     "done": step_result.done,
                     "info": step_result.info,
                     "next_knowledge": step_result.state.knowledge,
-                    "next_relation_set": list(step_result.state.relation_set),
+                    "next_candidate_edges": [edge.to_display_text() for edge in step_result.state.candidate_edges],
+                    "next_candidate_edges_length": len(step_result.state.candidate_edges),
                 },
             }
             logs["steps"].append(step_log)
@@ -219,7 +222,7 @@ async def run_test(args: argparse.Namespace) -> int:
             print(f"[STEP {state.step_index}] action={step_log['action']['type']}:{step_log['action']['value']}")
             print(f"reward={step_result.reward:.3f}, done={step_result.done}")
             print(step_result.state.knowledge)
-            print(format_relation_set(step_result.state.relation_set))
+            print(format_candidate_edges(step_result.state.candidate_edges))
 
             state = step_result.state
             if step_result.done:

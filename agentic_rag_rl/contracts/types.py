@@ -5,26 +5,12 @@ from typing import Any
 
 
 @dataclass(slots=True)
-class RelationEdge:
-    edge_id: str
-    relation: str
-    src_id: str | None
-    tgt_id: str | None
-    next_entity: str | None
-    direction: str
-    description: str = ""
-    keywords: str = ""
-    weight: float = 1.0
-
-
-@dataclass(slots=True)
-class RelationOption:
-    relation: str
-    count: int = 0
-
-
-@dataclass(slots=True)
 class PathTrace:
+    """路径轨迹数据结构。
+
+    nodes 保存实体序列，relations 保存边关系序列，
+    两者共同描述一条从起点到当前节点的推理路径。
+    """
     nodes: list[str]
     relations: list[str]
     score: float = 0.0
@@ -56,65 +42,34 @@ class PathTrace:
 
 @dataclass(slots=True)
 class SeedSnapshot:
+    """Provider 输出的统一图快照。"""
     question: str
     keywords: dict[str, list[str]]
-    entity_edges: dict[str, list[CandidateEdge]]  # Edge-Select: 使用 CandidateEdge
+    entity_edges: dict[str, list["CandidateEdge"]]
     processing_info: dict[str, Any] = field(default_factory=dict)
     raw_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class RelationEnvState:
-    question: str
-    knowledge: str
-    relation_set: list[str]
-    active_paths: list[PathTrace]
-    history: list[dict[str, str]]
-    step_index: int
-    done: bool = False
-
-
-@dataclass(slots=True)
-class RelationEnvAction:
-    relation_select: str | None = None
-    answer: str | None = None
-
-    @classmethod
-    def select_relation(cls, relation: str) -> "RelationEnvAction":
-        return cls(relation_select=relation)
-
-    @classmethod
-    def answer_now(cls, answer: str) -> "RelationEnvAction":
-        return cls(answer=answer)
-
-
-@dataclass(slots=True)
-class StepResult:
-    state: RelationEnvState
-    reward: float
-    done: bool
-    info: dict[str, Any] = field(default_factory=dict)
-
-
-# ========== Edge-Select 类型定义 ==========
-
-@dataclass(slots=True)
 class CandidateEdge:
-    """可读边：包含语义化显示信息和内部引用字段"""
+    """候选边定义。
+
+    对 Agent 暴露 src_name/relation/tgt_name，
+    对系统保留 internal_*_ref 作为内部追踪引用。
+    """
     edge_id: str
-    src_name: str  # 源实体可读名称
-    relation: str  # 关系名
-    tgt_name: str  # 目标实体可读名称
-    direction: str  # "forward" | "backward"
+    src_name: str
+    relation: str
+    tgt_name: str
+    direction: str
     description: str = ""
     keywords: str = ""
     weight: float = 1.0
-    # 内部引用字段（对Agent不可见，仅内部使用）
-    internal_src_ref: str | None = None  # 内部ID，如Freebase MID
-    internal_tgt_ref: str | None = None  # 内部ID，如Freebase MID
+    internal_src_ref: str | None = None
+    internal_tgt_ref: str | None = None
 
     def to_display_text(self) -> str:
-        """转换为Agent可见的可读文本"""
+        """返回 Agent 可读边文本。"""
         if self.direction == "forward":
             return f"{self.src_name} -{self.relation}-> {self.tgt_name}"
         else:
@@ -123,17 +78,17 @@ class CandidateEdge:
 
 @dataclass(slots=True)
 class EdgeEnvState:
-    """Edge-Select模式的环境状态"""
+    """Env 暴露给 Policy 的状态载体。"""
     question: str
-    knowledge: str  # 当前累积的知识/路径
-    candidate_edges: list[CandidateEdge]  # 候选边列表
-    active_paths: list[PathTrace]  # 活跃路径
-    history: list[dict[str, str]]  # 动作历史
+    knowledge: str
+    candidate_edges: list[CandidateEdge]
+    active_paths: list[PathTrace]
+    history: list[dict[str, str]]
     step_index: int
     done: bool = False
 
     def get_candidate_edges_text(self) -> str:
-        """生成候选边的可读文本（供Agent查看）"""
+        """生成候选边可读文本（供日志与调试使用）。"""
         if not self.candidate_edges:
             return "（无候选边）"
         lines = []
@@ -144,14 +99,25 @@ class EdgeEnvState:
 
 @dataclass(slots=True)
 class EdgeEnvAction:
-    """Edge-Select模式的环境动作"""
-    edge_select: str | None = None  # 选中的边（可读文本）
+    """Edge-Select 模式的环境动作。"""
+    edge_select: str | None = None
     answer: str | None = None
 
     @classmethod
     def select_edge(cls, edge_text: str) -> "EdgeEnvAction":
+        """构造边选择动作。"""
         return cls(edge_select=edge_text)
 
     @classmethod
     def answer_now(cls, answer: str) -> "EdgeEnvAction":
+        """构造直接回答动作。"""
         return cls(answer=answer)
+
+
+@dataclass(slots=True)
+class StepResult:
+    """Env 单步执行结果。"""
+    state: EdgeEnvState
+    reward: float
+    done: bool
+    info: dict[str, Any] = field(default_factory=dict)

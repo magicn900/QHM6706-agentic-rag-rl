@@ -14,7 +14,6 @@ from .templates import (
     build_action_prompt,
     format_candidate_edges,
     format_knowledge_body,
-    format_relation_set,
 )
 
 __all__ = [
@@ -33,5 +32,4 @@ __all__ = [
     "build_action_prompt",
     "format_candidate_edges",
     "format_knowledge_body",
-    "format_relation_set",
 ]

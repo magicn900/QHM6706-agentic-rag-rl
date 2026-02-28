@@ -58,6 +58,7 @@ This file must be continuously updated as project constraints evolve.
 | C | ✅ | Env主链路替换（已完成集成测试验证） |
 | D | ✅ | Provider适配（已完成集成测试验证） |
 | E | ✅ | Freebase外部服务集成（已完成集成测试验证） |
+| F | ✅ | 迁移完成与清理（已删除旧relation链路，完成全部测试验证） |
 
 ---
 

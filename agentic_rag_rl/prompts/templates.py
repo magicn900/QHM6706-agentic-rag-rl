@@ -43,11 +43,6 @@ def format_candidate_edges(candidate_edges: list[CandidateEdge]) -> str:
     return CANDIDATE_EDGES_TEMPLATE.format(edges="\n".join(lines))
 
 
-def format_relation_set(relation_set: list[str]) -> str:
-    """遗留函数，保持向后兼容"""
-    return "<relation_set>" + ", ".join(relation_set) + "</relation_set>"
-
-
 def build_action_prompt(*, question: str, knowledge: str, candidate_edges: list[CandidateEdge]) -> str:
     """构造给 Agent 的完整提示词（Edge-Select模式）"""
     return (

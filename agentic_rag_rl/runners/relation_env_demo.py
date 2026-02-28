@@ -4,8 +4,8 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from ..contracts import RelationEnvAction
-from ..envs import RelationSelectionEnv
+from ..contracts import EdgeEnvAction
+from ..envs import EdgeSelectionEnv
 from ..policies import OpenAIActionPolicy
 from ..prompts import (
     MANUAL_INPUT_PROMPT,
@@ -13,16 +13,16 @@ from ..prompts import (
     THINK_HEURISTIC_SELECT_TEMPLATE,
     THINK_MANUAL_ANSWER,
     THINK_MANUAL_SELECT_TEMPLATE,
-    format_relation_set,
+    format_candidate_edges,
 )
 from ..providers import create_lightrag_graph_provider_from_env
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run relation-selection environment demo with LightRAG provider.")
+    parser = argparse.ArgumentParser(description="Run edge-selection environment demo with LightRAG provider.")
     parser.add_argument("--question", required=True, help="User question for one episode.")
     parser.add_argument("--beam-width", type=int, default=4, help="Max active path count after pruning.")
-    parser.add_argument("--max-steps", type=int, default=4, help="Maximum relation-selection steps before stop.")
+    parser.add_argument("--max-steps", type=int, default=4, help="Maximum edge-selection steps before stop.")
     parser.add_argument("--top-k", type=int, default=20, help="Top-k for graph retrieval.")
     parser.add_argument("--mode", default="hybrid", help="LightRAG query mode.")
     parser.add_argument("--use-mock", action="store_true", help="Use mock adapter instead of real API.")
@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--policy",
         choices=["llm", "heuristic", "manual"],
         default="llm",
-        help="Action policy: llm for external API model, heuristic for auto first-relation, manual for terminal input.",
+        help="Action policy: llm for external API model, heuristic for auto first-edge, manual for terminal input.",
     )
     return parser
 
@@ -46,7 +46,7 @@ async def run_episode(args: argparse.Namespace) -> None:
         use_mock=args.use_mock,
         default_mode=args.mode,
     )
-    env = RelationSelectionEnv(
+    env = EdgeSelectionEnv(
         provider=provider,
         beam_width=args.beam_width,
         max_steps=args.max_steps,
@@ -60,25 +60,25 @@ async def run_episode(args: argparse.Namespace) -> None:
     try:
         state = await env.reset(args.question)
         print(state.knowledge)
-        print(format_relation_set(state.relation_set))
+        print(format_candidate_edges(state.candidate_edges))
 
         while not state.done:
             if args.policy == "manual":
                 user_input = input(MANUAL_INPUT_PROMPT).strip()
                 if user_input.startswith("answer:"):
-                    action = RelationEnvAction.answer_now(user_input.split("answer:", 1)[1].strip())
+                    action = EdgeEnvAction.answer_now(user_input.split("answer:", 1)[1].strip())
                     reasoning = THINK_MANUAL_ANSWER
                 else:
-                    action = RelationEnvAction.select_relation(user_input)
-                    reasoning = THINK_MANUAL_SELECT_TEMPLATE.format(relation=user_input)
+                    action = EdgeEnvAction.select_edge(user_input)
+                    reasoning = THINK_MANUAL_SELECT_TEMPLATE.format(edge=user_input)
             elif args.policy == "heuristic":
-                if state.relation_set and state.step_index < args.max_steps:
-                    selected_relation = state.relation_set[0]
-                    action = RelationEnvAction.select_relation(selected_relation)
-                    reasoning = THINK_HEURISTIC_SELECT_TEMPLATE.format(relation=selected_relation)
+                if state.candidate_edges and state.step_index < args.max_steps:
+                    selected_edge = state.candidate_edges[0].to_display_text()
+                    action = EdgeEnvAction.select_edge(selected_edge)
+                    reasoning = THINK_HEURISTIC_SELECT_TEMPLATE.format(edge=selected_edge)
                 else:
                     auto_answer = await provider.answer(state.question, mode=args.mode)
-                    action = RelationEnvAction.answer_now(auto_answer)
+                    action = EdgeEnvAction.answer_now(auto_answer)
                     reasoning = THINK_HEURISTIC_FALLBACK_ANSWER
             else:
                 if policy is None:
@@ -91,13 +91,13 @@ async def run_episode(args: argparse.Namespace) -> None:
 
             print(f"reward={step_result.reward:.3f}, done={step_result.done}")
             print(state.knowledge)
-            print(format_relation_set(state.relation_set))
+            print(format_candidate_edges(state.candidate_edges))
 
             if step_result.done:
                 final_answer = step_result.info.get("final_answer", "")
                 if final_answer:
                     print(f"<answer>{final_answer}</answer>")
-                print("[OK] Core relation env episode passed.")
+                print("[OK] Core edge env episode passed.")
                 break
     finally:
         await provider.finalize()

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..config import CoreAPIConfig
 from .base import GraphProvider
+from .freebase_provider import FreebaseGraphProvider, create_freebase_graph_provider_from_env
 from .lightrag_provider import LightRAGGraphProvider, create_lightrag_graph_provider_from_env
 
 
@@ -75,16 +76,17 @@ def create_graph_provider_from_env(
             ) from e
     
     elif provider_type == "freebase":
-        # Freebase provider 待实现
-        raise UnsupportedProviderError(
-            "Freebase provider is not yet implemented. "
-            "Use 'lightrag' for now."
-        )
+        try:
+            return create_freebase_graph_provider_from_env()
+        except Exception as e:
+            raise ProviderInitError(
+                f"Failed to initialize Freebase provider: {e}"
+            ) from e
     
     else:
         raise UnsupportedProviderError(
             f"Unsupported graph_adapter_type: '{provider_type}'. "
-            f"Supported: 'lightrag'"
+            f"Supported: 'lightrag', 'freebase'"
         )
 
 

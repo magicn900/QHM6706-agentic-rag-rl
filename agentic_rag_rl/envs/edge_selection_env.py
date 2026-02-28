@@ -33,9 +33,8 @@ from ..utils.embedding_pruner import EmbeddingPruner
 class EdgeSelectionEnv:
     """Edge-Select 模式的环境类
     
-    与 RelationSelectionEnv 的核心区别：
     - Agent 选择的是完整边（src -relation-> tgt），而非仅关系名
-    - 状态中包含 candidate_edges（可读边列表），而非 relation_set
+    - 状态中使用 candidate_edges（可读边列表）
     - 支持多边同时扩展（分叉推理）
     """
     
@@ -81,7 +80,7 @@ class EdgeSelectionEnv:
         snapshot = await self.provider.get_snapshot(question=self._question, top_k=self.top_k)
         self._snapshot = snapshot
         
-        # 将 provider 返回的 RelationEdge 转换为 CandidateEdge
+        # 收集 provider 返回的候选边
         self._candidate_edges = self._convert_edges(snapshot)
         
         # 初始化活跃路径（从召回的实体出发）
