@@ -9,7 +9,7 @@ from third_party_integration.lightrag_integration import (
 )
 
 from ..config import CoreAPIConfig
-from ..contracts import RelationEdge, SeedSnapshot
+from ..contracts import CandidateEdge, SeedSnapshot
 from .base import GraphProvider
 
 
@@ -47,24 +47,35 @@ class LightRAGGraphProvider(GraphProvider):
         )
         data = response.get("data", {}) if isinstance(response, dict) else {}
 
-        entity_edges: dict[str, list[RelationEdge]] = defaultdict(list)
+        entity_edges: dict[str, list[CandidateEdge]] = defaultdict(list)
         for entity_candidate in data.get("entity_relation_candidates", []):
             entity_name = str(entity_candidate.get("entity_name", "")).strip()
             if not entity_name:
                 continue
             for edge in entity_candidate.get("candidate_edges", []):
                 relation = self._extract_relation_name(edge)
+                # 确定边的方向和端点
+                direction = str(edge.get("direction", "unknown"))
+                if direction == "forward":
+                    src_name = entity_name
+                    tgt_name = edge.get("next_entity", entity_name)
+                else:
+                    src_name = edge.get("next_entity", entity_name)
+                    tgt_name = entity_name
+
                 entity_edges[entity_name].append(
-                    RelationEdge(
+                    CandidateEdge(
                         edge_id=str(edge.get("edge_id", "")),
+                        src_name=src_name,
                         relation=relation,
-                        src_id=edge.get("src_id"),
-                        tgt_id=edge.get("tgt_id"),
-                        next_entity=edge.get("next_entity"),
-                        direction=str(edge.get("direction", "unknown")),
+                        tgt_name=tgt_name,
+                        direction=direction,
                         description=str(edge.get("description", "")),
                         keywords=str(edge.get("keywords", "")),
                         weight=float(edge.get("weight", 1.0)),
+                        # 内部引用（LightRAG 可选填）
+                        internal_src_ref=edge.get("src_id"),
+                        internal_tgt_ref=edge.get("tgt_id"),
                     )
                 )
 

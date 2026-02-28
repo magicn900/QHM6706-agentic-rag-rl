@@ -32,7 +32,7 @@ This file must be continuously updated as project constraints evolve.
 - Prefer unified envs (`LIGHTRAG_BASE_URL` / `LIGHTRAG_API_KEY`) with optional split envs when endpoints differ.
 
 ## Run and Validation
-- Preferred functional test command (from repo root):
+- Preferred functional test command (from repo root):（这是旧的，基于 LightRAG 的测试）
   - `python -m third_party_integration.lightrag_integration.scripts.functional_test_lightrag`
 - Success marker:
   - `[OK] LightRAG functional test passed.`
@@ -56,7 +56,7 @@ This file must be continuously updated as project constraints evolve.
 | A | ✅ | 类型定义、协议、配置 |
 | B | ✅ | Prompt/Policy迁移（已完成模拟测试验证） |
 | C | ✅ | Env主链路替换（已完成集成测试验证） |
-| D | ⏳ | Provider适配 |
+| D | ✅ | Provider适配（已完成集成测试验证） |
 
 ---
 

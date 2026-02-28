@@ -22,7 +22,6 @@ from ..contracts import (
     EdgeEnvAction,
     EdgeEnvState,
     PathTrace,
-    RelationEdge,
     SeedSnapshot,
     StepResult,
 )
@@ -311,9 +310,10 @@ class EdgeSelectionEnv:
         return unique
 
     def _convert_edges(self, snapshot: SeedSnapshot) -> list[CandidateEdge]:
-        """将 provider 返回的 RelationEdge 转换为 CandidateEdge
+        """将 provider 返回的 CandidateEdge 收集为列表
         
-        这是翻译墙的关键：把内部机器标识转换为 Agent 可读的形式。
+        Provider 已经返回 CandidateEdge（翻译墙在 Provider 层），
+        这里只需要收集和去重。
         
         Args:
             snapshot: provider 返回的快照
@@ -321,38 +321,12 @@ class EdgeSelectionEnv:
         Returns:
             CandidateEdge 列表
         """
-        candidate_edges: list[CandidateEdge] = []
+        all_edges: list[CandidateEdge] = []
         
         for entity_name, edges in snapshot.entity_edges.items():
-            for rel_edge in edges:
-                # 确定边的方向和端点
-                # forward: 从 entity_name 指向 next_entity
-                # backward: 从 next_entity 指向 entity_name
-                if rel_edge.direction == "forward":
-                    src_name = entity_name
-                    tgt_name = rel_edge.next_entity or entity_name
-                else:
-                    src_name = rel_edge.next_entity or entity_name
-                    tgt_name = entity_name
-                
-                # 构建 CandidateEdge
-                candidate_edges.append(
-                    CandidateEdge(
-                        edge_id=rel_edge.edge_id,
-                        src_name=src_name,
-                        relation=rel_edge.relation,
-                        tgt_name=tgt_name,
-                        direction=rel_edge.direction,
-                        description=rel_edge.description,
-                        keywords=rel_edge.keywords,
-                        weight=rel_edge.weight,
-                        # 内部引用（对 Agent 不可见）
-                        internal_src_ref=rel_edge.src_id,
-                        internal_tgt_ref=rel_edge.tgt_id,
-                    )
-                )
+            all_edges.extend(edges)
         
-        return candidate_edges
+        return all_edges
 
     async def _generate_fallback_answer(self) -> str:
         """生成回退答案（达到最大步数时）"""

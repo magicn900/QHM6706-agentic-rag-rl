@@ -12,7 +12,6 @@ from agentic_rag_rl.contracts import (
     CandidateEdge,
     EdgeEnvAction,
     PathTrace,
-    RelationEdge,
     SeedSnapshot,
 )
 
@@ -43,34 +42,36 @@ class MockGraphProvider:
     ) -> SeedSnapshot:
         self.call_count += 1
         
-        # 构建返回数据
-        entity_edges: dict[str, list[RelationEdge]] = defaultdict(list)
+        # 构建返回数据（使用 CandidateEdge）
+        entity_edges: dict[str, list[CandidateEdge]] = defaultdict(list)
         
         # 第一轮：返回初始实体及其边
         if self.call_count == 1:
             # 初始实体：Linux
             entity_edges["Linux"] = [
-                RelationEdge(
+                CandidateEdge(
                     edge_id="e1",
+                    src_name="Linux",
                     relation="基于",
-                    src_id="m.0x9",
-                    tgt_id="m.0y2",
-                    next_entity="Unix",
+                    tgt_name="Unix",
                     direction="forward",
                     description="Linux基于Unix",
                     keywords="操作系统,Unix",
                     weight=0.9,
+                    internal_src_ref="m.0x9",
+                    internal_tgt_ref="m.0y2",
                 ),
-                RelationEdge(
+                CandidateEdge(
                     edge_id="e2",
+                    src_name="Linux",
                     relation="最初由...开发",
-                    src_id="m.0x9",
-                    tgt_id="m.0z1",
-                    next_entity="林纳斯·托瓦兹",
+                    tgt_name="林纳斯·托瓦兹",
                     direction="forward",
                     description="Linux由林纳斯·托瓦兹开发",
                     keywords="Linux,创始人",
                     weight=0.95,
+                    internal_src_ref="m.0x9",
+                    internal_tgt_ref="m.0z1",
                 ),
             ]
         else:
@@ -78,30 +79,32 @@ class MockGraphProvider:
             for keyword in (ll_keywords or []):
                 if "林纳斯" in keyword:
                     entity_edges["林纳斯·托瓦兹"] = [
-                        RelationEdge(
+                        CandidateEdge(
                             edge_id="e3",
+                            src_name="林纳斯·托瓦兹",
                             relation="出生地",
-                            src_id="m.0z1",
-                            tgt_id="m.0w3",
-                            next_entity="赫尔辛基",
+                            tgt_name="赫尔辛基",
                             direction="forward",
                             description="林纳斯出生于赫尔辛基",
                             keywords="芬兰,城市",
                             weight=0.8,
+                            internal_src_ref="m.0z1",
+                            internal_tgt_ref="m.0w3",
                         ),
                     ]
                 elif "Unix" in keyword:
                     entity_edges["Unix"] = [
-                        RelationEdge(
+                        CandidateEdge(
                             edge_id="e4",
+                            src_name="Unix",
                             relation="发明",
-                            src_id="m.0y2",
-                            tgt_id="m.0v4",
-                            next_entity="肯·汤普逊",
+                            tgt_name="肯·汤普逊",
                             direction="forward",
                             description="Unix由肯·汤普逊发明",
                             keywords="Unix,贝尔实验室",
                             weight=0.85,
+                            internal_src_ref="m.0y2",
+                            internal_tgt_ref="m.0v4",
                         ),
                     ]
         

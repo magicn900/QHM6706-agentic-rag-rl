@@ -58,7 +58,7 @@ class PathTrace:
 class SeedSnapshot:
     question: str
     keywords: dict[str, list[str]]
-    entity_edges: dict[str, list[RelationEdge]]
+    entity_edges: dict[str, list[CandidateEdge]]  # Edge-Select: 使用 CandidateEdge
     processing_info: dict[str, Any] = field(default_factory=dict)
     raw_data: dict[str, Any] = field(default_factory=dict)
 
