@@ -32,3 +32,11 @@ class GraphProvider(ABC):
     @abstractmethod
     async def answer(self, question: str, *, mode: str = "hybrid") -> str:
         raise NotImplementedError
+
+    async def resolve_mid_names(self, mids: list[str]) -> dict[str, str]:
+        """解析 MID 到可读名称（可选能力）。
+
+        默认返回空映射，表示当前 provider 不支持该能力。
+        """
+        _ = mids
+        return {}

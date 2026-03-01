@@ -40,6 +40,9 @@ def create_graph_provider_from_env(
     working_dir: str | Path | None = None,
     use_mock: bool = False,
     default_mode: str = "hybrid",
+    # Freebase 专用参数
+    search_timeout: float = 60.0,
+    sparql_timeout: float = 120.0,
 ) -> GraphProvider:
     """根据环境变量创建对应的 GraphProvider
     
@@ -50,6 +53,8 @@ def create_graph_provider_from_env(
         working_dir: 工作目录路径（部分 provider 需要）
         use_mock: 是否使用 mock 模式（用于测试）
         default_mode: 默认查询模式
+        search_timeout: 实体搜索超时时间（秒），仅 Freebase 有效
+        sparql_timeout: SPARQL 查询超时时间（秒），仅 Freebase 有效
     
     Returns:
         GraphProvider 实例
@@ -77,7 +82,10 @@ def create_graph_provider_from_env(
     
     elif provider_type == "freebase":
         try:
-            return create_freebase_graph_provider_from_env()
+            return create_freebase_graph_provider_from_env(
+                search_timeout=search_timeout,
+                sparql_timeout=sparql_timeout,
+            )
         except Exception as e:
             raise ProviderInitError(
                 f"Failed to initialize Freebase provider: {e}"

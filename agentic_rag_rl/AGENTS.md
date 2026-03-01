@@ -37,6 +37,7 @@ agentic_rag_rl/
 ┌────────────────────────────────────────────────────────────────┐
 │  GraphProvider (LightRAG / Freebase)                           │
 │    - get_snapshot() 输出 SeedSnapshot + CandidateEdge           │
+│    - resolve_mid_names() 提供可选MID名称探测能力                │
 │    - ProviderFactory 按 graph_adapter_type 选择图源             │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -57,6 +58,12 @@ agentic_rag_rl/
 - Env 集成验证：`python -m agentic_rag_rl.runners.test_edge_selection_env`
 - Mock 策略演示：`python -m agentic_rag_rl.runners.mock_edge_select_test`
 - Phase G 烟测：`python -m agentic_rag_rl.runners.edge_env_demo`
+- WebQSP Freebase 烟测：`python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQTest-1092,WebQTest-1198 --max-steps 5 --policy llm`
+
+## Runner 边界约束
+
+- `runners/` 只依赖 `providers/` 暴露的抽象能力，不直接引用 `third_party_integration` 下 client。
+- 需要图源附加能力（如 MID 名称探测）时，通过 `GraphProvider` 方法扩展并由具体 provider 实现。
 
 ## 子模块文档
 

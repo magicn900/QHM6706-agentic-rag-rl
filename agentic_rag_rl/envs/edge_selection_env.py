@@ -16,6 +16,7 @@ Edge-Select 模式的环境实现
 from __future__ import annotations
 
 from collections import Counter
+import re
 
 from ..contracts import (
     CandidateEdge,
@@ -212,7 +213,11 @@ class EdgeSelectionEnv:
         )
 
         # 更新候选边
-        self._candidate_edges = self._convert_edges(self._snapshot)
+        converted_edges = self._convert_edges(self._snapshot)
+        selected_texts = {edge.to_display_text() for edge in selected_edges}
+        self._candidate_edges = [edge for edge in converted_edges if edge.to_display_text() not in selected_texts]
+        if not self._candidate_edges:
+            self._candidate_edges = converted_edges
 
         # 剪枝活跃路径
         self._active_paths = await self._prune_paths(expanded_paths)
@@ -321,11 +326,74 @@ class EdgeSelectionEnv:
             CandidateEdge 列表
         """
         all_edges: list[CandidateEdge] = []
+        seen_keys: set[tuple[str, str, str, str]] = set()
         
         for entity_name, edges in snapshot.entity_edges.items():
-            all_edges.extend(edges)
-        
+            for edge in edges:
+                dedupe_key = (
+                    edge.src_name,
+                    edge.relation,
+                    edge.tgt_name,
+                    edge.direction,
+                )
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                all_edges.append(edge)
+
+        # 按问题语义相关性重排，提升 Agent 首屏候选质量
+        all_edges.sort(key=self._score_edge_relevance, reverse=True)
         return all_edges
+
+    def _score_edge_relevance(self, edge: CandidateEdge) -> float:
+        """计算候选边与问题的相关性分数。
+
+        目标：
+        1. 提升与问题谓词语义一致的边排序；
+        2. 降低出版/许可证/节目元数据边对决策的干扰；
+        3. 不改变边集合，仅改变呈现顺序。
+        """
+        question = (self._question or "").lower()
+        relation = (edge.relation or "").lower()
+        edge_text = edge.to_display_text().lower()
+
+        # 基础词面重叠分
+        query_tokens = {t for t in re.findall(r"[a-z0-9_]+", question) if len(t) >= 2}
+        edge_tokens = {t for t in re.findall(r"[a-z0-9_]+", edge_text) if len(t) >= 2}
+        lexical = 0.0
+        if query_tokens and edge_tokens:
+            lexical = len(query_tokens.intersection(edge_tokens)) / max(len(query_tokens), 1)
+
+        score = lexical
+
+        # 关系语义匹配加权
+        if "influenc" in question and "influenc" in relation:
+            score += 3.0
+
+        if any(word in question for word in ["mom", "mother", "father", "parent"]):
+            if any(word in relation for word in ["parent", "children", "mother", "father"]):
+                score += 2.5
+
+        if any(word in question for word in ["play", "played", "actor", "film", "movie"]):
+            if any(word in relation for word in ["film", "actor", "performance", "character", "starring"]):
+                score += 2.0
+            if relation.startswith("tv.tv_series_episode"):
+                score -= 1.5
+
+        # 常见元数据降权
+        metadata_markers = [
+            "publication_date",
+            "place_of_publication",
+            "editions",
+            "license",
+            "tvrage_id",
+            "episode_number",
+            "air_date",
+        ]
+        if any(marker in relation for marker in metadata_markers):
+            score -= 0.8
+
+        return score
 
     async def _generate_fallback_answer(self) -> str:
         """生成回退答案（达到最大步数时）"""
@@ -357,6 +425,18 @@ class EdgeSelectionEnv:
         
         # 从选中的边提取关键词
         for edge in selected_edges:
+            # 优先注入内部实体引用（MID），保证后续扩展可被 Freebase 解析
+            internal_refs = [edge.internal_src_ref, edge.internal_tgt_ref]
+            for ref in internal_refs:
+                normalized_ref = (ref or "").strip()
+                if normalized_ref and normalized_ref not in unique:
+                    unique.append(normalized_ref)
+                    if len(unique) >= 12:
+                        break
+
+            if len(unique) >= 12:
+                break
+
             if edge.keywords:
                 for kw in edge.keywords.split(","):
                     normalized = kw.strip()
@@ -364,8 +444,9 @@ class EdgeSelectionEnv:
                         unique.append(normalized)
                         if len(unique) >= 12:
                             break
-            # 也添加关系名
-            if edge.relation and edge.relation not in unique:
+            # 也添加关系名（仅当看起来像实体名时，排除 book.written_work.author 格式）
+            # 关系名会传递给 Freebase 实体搜索，导致 "Could not resolve MID" 错误
+            if edge.relation and edge.relation not in unique and "." not in edge.relation:
                 unique.append(edge.relation)
                 if len(unique) >= 12:
                     break
@@ -375,6 +456,9 @@ class EdgeSelectionEnv:
         
         # 添加 frontier 实体
         for entity in frontier:
+            # 匿名占位实体不可直接用于实体搜索，避免无效请求
+            if entity.startswith("未知实体#"):
+                continue
             if entity and entity not in unique:
                 unique.append(entity)
                 if len(unique) >= 12:

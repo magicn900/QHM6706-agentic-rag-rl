@@ -109,16 +109,29 @@ class SPARQLClient:
         if not mid:
             return []
 
+        # Freebase RDF 使用完整 URI 格式: http://rdf.freebase.com/ns/m.xxxx
+        fb_ns = "http://rdf.freebase.com/ns/"
+        mid_uri = f"{fb_ns}{mid}"
+
         # 构建 SPARQL 查询
         if direction == "forward":
             # 查询从该实体出发的边
             sparql = f"""
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX ns: <http://rdf.freebase.com/ns/>
             SELECT DISTINCT ?relation ?target ?targetName
             WHERE {{
-                <{mid}> ?relation ?target .
-                OPTIONAL {{ ?target rdfs:label ?targetName }}
+                <{mid_uri}> ?relation ?target .
+                OPTIONAL {{
+                    ?target ns:type.object.name ?targetNameFb .
+                    FILTER(lang(?targetNameFb) = '' || langMatches(lang(?targetNameFb), 'en'))
+                }}
+                OPTIONAL {{
+                    ?target rdfs:label ?targetNameRdfs .
+                    FILTER(lang(?targetNameRdfs) = '' || langMatches(lang(?targetNameRdfs), 'en'))
+                }}
+                BIND(COALESCE(?targetNameFb, ?targetNameRdfs) AS ?targetName)
             }}
             LIMIT {max_edges}
             """
@@ -127,10 +140,19 @@ class SPARQLClient:
             sparql = f"""
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX ns: <http://rdf.freebase.com/ns/>
             SELECT DISTINCT ?relation ?source ?sourceName
             WHERE {{
-                ?source ?relation <{mid}> .
-                OPTIONAL {{ ?source rdfs:label ?sourceName }}
+                ?source ?relation <{mid_uri}> .
+                OPTIONAL {{
+                    ?source ns:type.object.name ?sourceNameFb .
+                    FILTER(lang(?sourceNameFb) = '' || langMatches(lang(?sourceNameFb), 'en'))
+                }}
+                OPTIONAL {{
+                    ?source rdfs:label ?sourceNameRdfs .
+                    FILTER(lang(?sourceNameRdfs) = '' || langMatches(lang(?sourceNameRdfs), 'en'))
+                }}
+                BIND(COALESCE(?sourceNameFb, ?sourceNameRdfs) AS ?sourceName)
             }}
             LIMIT {max_edges}
             """
@@ -139,17 +161,34 @@ class SPARQLClient:
             sparql = f"""
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX ns: <http://rdf.freebase.com/ns/>
             SELECT DISTINCT ?relation ?target ?targetName ?source ?sourceName ?dir
             WHERE {{
                 {{
-                    <{mid}> ?relation ?target .
-                    OPTIONAL {{ ?target rdfs:label ?targetName }}
+                    <{mid_uri}> ?relation ?target .
+                    OPTIONAL {{
+                        ?target ns:type.object.name ?targetNameFb .
+                        FILTER(lang(?targetNameFb) = '' || langMatches(lang(?targetNameFb), 'en'))
+                    }}
+                    OPTIONAL {{
+                        ?target rdfs:label ?targetNameRdfs .
+                        FILTER(lang(?targetNameRdfs) = '' || langMatches(lang(?targetNameRdfs), 'en'))
+                    }}
+                    BIND(COALESCE(?targetNameFb, ?targetNameRdfs) AS ?targetName)
                     BIND("forward" AS ?dir)
                 }}
                 UNION
                 {{
-                    ?source ?relation <{mid}> .
-                    OPTIONAL {{ ?source rdfs:label ?sourceName }}
+                    ?source ?relation <{mid_uri}> .
+                    OPTIONAL {{
+                        ?source ns:type.object.name ?sourceNameFb .
+                        FILTER(lang(?sourceNameFb) = '' || langMatches(lang(?sourceNameFb), 'en'))
+                    }}
+                    OPTIONAL {{
+                        ?source rdfs:label ?sourceNameRdfs .
+                        FILTER(lang(?sourceNameRdfs) = '' || langMatches(lang(?sourceNameRdfs), 'en'))
+                    }}
+                    BIND(COALESCE(?sourceNameFb, ?sourceNameRdfs) AS ?sourceName)
                     BIND("backward" AS ?dir)
                 }}
             }}
@@ -192,9 +231,8 @@ class SPARQLClient:
                 if direction == "forward":
                     target_uri = binding.get("target", {}).get("value", "")
                     target_name = binding.get("targetName", {}).get("value", "")
-                    # 如果没有 label，使用 MID
                     if not target_name:
-                        target_name = self._extract_mid(target_uri)
+                        target_name = self._extract_literal(target_uri)
                     
                     if target_uri:
                         edges.append({
@@ -207,7 +245,7 @@ class SPARQLClient:
                     source_uri = binding.get("source", {}).get("value", "")
                     source_name = binding.get("sourceName", {}).get("value", "")
                     if not source_name:
-                        source_name = self._extract_mid(source_uri)
+                        source_name = self._extract_literal(source_uri)
                     
                     if source_uri:
                         edges.append({
@@ -221,7 +259,7 @@ class SPARQLClient:
                         target_uri = binding.get("target", {}).get("value", "")
                         target_name = binding.get("targetName", {}).get("value", "")
                         if not target_name:
-                            target_name = self._extract_mid(target_uri)
+                            target_name = self._extract_literal(target_uri)
                         if target_uri:
                             edges.append({
                                 "relation": relation,
@@ -232,7 +270,7 @@ class SPARQLClient:
                         source_uri = binding.get("source", {}).get("value", "")
                         source_name = binding.get("sourceName", {}).get("value", "")
                         if not source_name:
-                            source_name = self._extract_mid(source_uri)
+                            source_name = self._extract_literal(source_uri)
                         if source_uri:
                             edges.append({
                                 "relation": relation,
@@ -275,15 +313,80 @@ class SPARQLClient:
             uri: 实体 URI
             
         Returns:
-            Freebase MID (如 m.xxx)
+            Freebase MID (如 m.xxx)，如果不是实体 URI 则返回空字符串
         """
         if not uri:
             return ""
         
-        # Freebase MID 格式: http://rdf.freebase.com/ns/m.06n7_
+        # Freebase 实体 MID 格式: http://rdf.freebase.com/ns/m.06n7_
+        # 关系 URI 格式: http://rdf.freebase.com/ns/book.written_work.author
+        # 其他 URI 格式: http://rdf.freebase.com/ns/type.object.type
         if "/ns/m." in uri:
             mid = uri.split("/ns/")[-1]
             # 移除最后的点号
             return mid.rstrip(".")
         
-        return uri
+        # 非实体 URI（关系、类型等），返回空字符串
+        return ""
+
+    def _extract_literal(self, value: str) -> str:
+        """从对象值中提取可读字面量。
+
+        - 如果是 MID URI：返回空（交给上层映射与占位逻辑处理）
+        - 如果是其他 URI：返回空（通常非可读实体名）
+        - 如果是普通字面量：直接返回
+        """
+        if not value:
+            return ""
+
+        if value.startswith("http://") or value.startswith("https://"):
+            if self._extract_mid(value):
+                return ""
+            return ""
+
+        return value.strip()
+
+    async def resolve_mid_names(self, mids: list[str]) -> dict[str, str]:
+        """批量解析 MID 对应的可读名称。
+
+        Args:
+            mids: MID 列表，如 ["m.01abc", "m.0xyz"]
+
+        Returns:
+            仅包含成功解析项的映射字典 {mid: name}
+        """
+        uniq_mids = [mid.strip() for mid in dict.fromkeys(mids) if mid and mid.strip()]
+        if not uniq_mids:
+            return {}
+
+        values = " ".join(f"ns:{mid}" for mid in uniq_mids)
+        sparql = f"""
+        PREFIX ns: <http://rdf.freebase.com/ns/>
+        SELECT DISTINCT ?mid ?name
+        WHERE {{
+            VALUES ?mid {{ {values} }}
+            ?mid ns:type.object.name ?name .
+            FILTER(lang(?name) = '' || langMatches(lang(?name), 'en'))
+        }}
+        """
+
+        result = await self.query(sparql)
+        bindings = result.get("results", {}).get("bindings", [])
+        resolved: dict[str, str] = {}
+
+        for item in bindings:
+            mid_uri = item.get("mid", {}).get("value", "")
+            name = item.get("name", {}).get("value", "").strip()
+            if not mid_uri or not name:
+                continue
+
+            mid = ""
+            if "/ns/" in mid_uri:
+                mid = mid_uri.split("/ns/")[-1].strip()
+            elif mid_uri.startswith("m.") or mid_uri.startswith("g."):
+                mid = mid_uri.strip()
+
+            if mid and mid not in resolved:
+                resolved[mid] = name
+
+        return resolved

@@ -61,11 +61,13 @@ FREEBASE_SPARQL_API_KEY=
 ```bash
 python -m third_party_integration.freebase_integration.scripts.test_freebase_integration
 python -m agentic_rag_rl.runners.edge_env_demo
+python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQTest-1092,WebQTest-1198 --max-steps 5 --policy llm
 ```
 
 期望现象：
 - 服务可用时，能看到实体召回与候选边扩展日志。
 - 服务不可用时，不抛出未处理异常，候选边可能为 0，但流程仍可结束。
+- WebQSP 烟测报告写入：`agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`，summary 中 `route_healthy: true` 视为线路健康。
 
 ## 5. 回退与故障行为
 
@@ -75,6 +77,8 @@ python -m agentic_rag_rl.runners.edge_env_demo
 2. `SPARQLClient.query()`：请求失败重试后返回空 `bindings`。
 3. `FreebaseAdapter.search_entities()/expand_edges()`：内部异常捕获后返回空结果。
 4. `EdgeSelectionEnv`：若候选边为空，可通过 `answer` 动作或达到步数上限终止。
+5. 未命名实体不会向 Agent 暴露 MID；使用 `未知实体#N` 占位，并保留 `internal_*_ref` 供后续扩展。
+6. 需要排查“未知实体是否真实无名”时，可通过 Provider 的 `resolve_mid_names()` 做批量探测。
 
 ## 6. 常见问题
 
@@ -84,7 +88,7 @@ python -m agentic_rag_rl.runners.edge_env_demo
 
 2. 能召回实体但无法扩展
    - 检查 SPARQL 服务是否支持输入 MID 查询。
-   - 检查关系是否被噪音过滤器过滤（当前默认过滤规则为空，通常不会过滤）。
+  - 检查关系是否被噪音过滤器过滤（当前默认过滤 `type.object.*` / `common.*` / `kg.*` 等系统噪声关系）。
 
 3. 模型调用错误
    - `edge_env_demo` 为 smoke 脚本，不依赖在线 LLM；如运行其他 runner 需要额外配置 Action 模型密钥。

@@ -59,6 +59,14 @@ class OpenAIActionPolicy:
         # 匹配每个边文本
         matched_edges: list[CandidateEdge] = []
         for edge_text in edge_texts:
+            # 支持“边1 / 边 2”等编号占位写法
+            indexed_match = re.match(r"^边\s*(\d+)$", edge_text)
+            if indexed_match:
+                idx = int(indexed_match.group(1)) - 1
+                if 0 <= idx < len(candidate_edges):
+                    matched_edges.append(candidate_edges[idx])
+                    continue
+
             # 优先精确匹配
             for edge in candidate_edges:
                 if edge.to_display_text() == edge_text:
@@ -98,6 +106,7 @@ class OpenAIActionPolicy:
         
         # 尝试解析 answer 标签
         answer_match = re.search(ANSWER_REGEX, content, flags=re.DOTALL)
+        loose_answer_match = re.search(r"<answer>(.*)$", content, flags=re.DOTALL)
 
         if edge_match:
             raw_edges = edge_match.group(1).strip()
@@ -120,8 +129,8 @@ class OpenAIActionPolicy:
                     "edge_ids": edge_ids,
                 }
 
-        if answer_match:
-            answer = answer_match.group(1).strip()
+        if answer_match or loose_answer_match:
+            answer = (answer_match.group(1) if answer_match else loose_answer_match.group(1)).strip()
             action = EdgeEnvAction.answer_now(answer)
             return action, content, {
                 "agent_prompt": prompt,

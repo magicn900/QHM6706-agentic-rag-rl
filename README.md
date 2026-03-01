@@ -88,6 +88,27 @@ Typical lightweight workflow:
 1. Build once with a chosen `graph-id`
 2. Iterate query tests many times with the same `graph-id`
 
+### WebQSP Freebase smoke test
+
+Runner:
+
+```bash
+conda activate agentic-rl
+python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQTest-1092,WebQTest-1198 --max-steps 5 --policy llm
+```
+
+Common options:
+
+- `--policy llm|heuristic`: decide via LLM or first-edge heuristic
+- `--search-timeout` / `--sparql-timeout`: Freebase HTTP timeouts (default 60s / 120s)
+- `--print-trace`: print step-level `agent_prompt` and `agent_raw_response`
+- `--disable-unknown-probe`: disable unknown MID name probing
+
+Report output:
+
+- `agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
+- Summary contains: `route_healthy`, `answer_hit_rate`, `cases_with_invalid_action`, `cases_with_mid_exposure`
+
 ## Third-party LightRAG Integration
 
 This project integrates LightRAG as a third-party component without modifying upstream source code by default.

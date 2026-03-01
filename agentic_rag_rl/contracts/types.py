@@ -103,6 +103,24 @@ class EdgeEnvAction:
     edge_select: str | None = None
     answer: str | None = None
 
+    @property
+    def action_type(self) -> str:
+        """返回动作类型。"""
+        if self.edge_select is not None:
+            return "edge_select"
+        elif self.answer is not None:
+            return "answer_now"
+        return "unknown"
+
+    @property
+    def action_value(self) -> str | None:
+        """返回动作的值。"""
+        if self.edge_select is not None:
+            return self.edge_select
+        elif self.answer is not None:
+            return self.answer
+        return None
+
     @classmethod
     def select_edge(cls, edge_text: str) -> "EdgeEnvAction":
         """构造边选择动作。"""

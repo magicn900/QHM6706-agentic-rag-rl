@@ -10,33 +10,33 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-# 默认黑名单前缀 - 系统级关系（暂时禁用，后续测试后启用）
-# DEFAULT_BLACKLIST_PREFIXES = (
-#     "type.object",
-#     "kg.",
-#     "common.",
-#     "freebase.",
-#     "user.",
-#     "base.",
-#     "conversion.",
-# )
+# 默认黑名单前缀 - 只过滤真正的系统级噪音，保留业务关系
+# 注意：不要过滤 book. location. 等业务前缀，否则会丢失关键关系
+DEFAULT_BLACKLIST_PREFIXES = (
+    "type.object",    # 系统元数据关系，必须过滤
+    "type.content",   # 内容存储元数据（blob/length/media_type），对推理无价值
+    "type.type.",     # 类型元关系
+    "common.image.",  # 图片尺寸/画廊等多媒体元数据
+    "common.resource.",  # 资源标注等非语义主干关系
+    "common.topic.",  # 通用topic元关系（notable_types/article/description等）
+    "kg.",            # 图谱系统关系
+    "freebase.",      # Freebase 内部表示关系
+    "base.kwebbase.", # WebBase 爬虫数据，质量差
+    "user.",          # 用户自定义关系，质量参差不齐
+)
 
-# 默认黑名单关系名（精确匹配，暂时禁用，后续测试后启用）
-# DEFAULT_BLACKLIST_RELATIONS = (
-#     "type",
-#     "id",
-#     "timestamp",
-#     "creator",
-#     "contributor",
-#     "description",
-#     "alias",
-#     "link",
-#     "key",
-# )
-
-# 暂时禁用过滤，全部放行
-DEFAULT_BLACKLIST_PREFIXES = ()
-DEFAULT_BLACKLIST_RELATIONS = ()
+# 默认黑名单关系名（精确匹配）
+DEFAULT_BLACKLIST_RELATIONS = (
+    "type",
+    "id",
+    "timestamp",
+    "creator",
+    "contributor",
+    "description",
+    "alias",
+    "link",
+    "key",
+)
 
 
 class NoiseFilter:

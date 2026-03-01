@@ -92,3 +92,23 @@
 
 - 持续迭代优化
 - 监控外部服务可用性
+
+---
+
+## T25 - WebQSP Freebase 烟测文档回填与边界纠偏
+
+**修改文件**:
+- `AGENTS.md`
+- `README.md`
+- `agentic_rag_rl/AGENTS.md`
+- `third_party_integration/AGENTS.md`
+- `third_party_integration/freebase_integration/docs/runbook.md`
+
+**核心变更**:
+- 新增 WebQSP Freebase 烟测命令与成功口径（`route_healthy: true`）
+- 文档化报告输出路径：`agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
+- 明确边界约束：Runner 禁止直连 Integration client，附加能力经 Provider 抽象暴露
+- 同步当前指标口径：`cases_with_zero_overlap_selection` 仅统计 `edge_select*`
+- 补充未知实体策略：对 Agent 使用 `未知实体#N` 占位，内部保留 MID 可追踪
+
+**验证**: ✅ 文档内容与当前实现一致（含 smoke 脚本、Provider 能力、集成层行为）

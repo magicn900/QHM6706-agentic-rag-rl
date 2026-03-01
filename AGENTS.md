@@ -37,6 +37,14 @@ This file must be continuously updated as project constraints evolve.
 - Success marker:
   - `[OK] LightRAG functional test passed.`
 
+- Preferred Freebase route smoke test command (from repo root):
+  - `python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQTest-1092,WebQTest-1198 --max-steps 5 --policy llm`
+- Freebase smoke success marker:
+  - summary 中 `route_healthy: true`
+
+- Diagnostic report path:
+  - `agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
+
 ## Naming Convention
 - Use default names for real integration paths (no `-real` / `_real` suffix).
 - Use `_mock` suffix for simulation-only scripts and wrappers.
@@ -106,6 +114,15 @@ This file must be continuously updated as project constraints evolve.
 - **Env层**：过滤逻辑、文本拼接、图剪枝。禁止调用LLM。
 - **Policy层**：提示词构建、XML解析。禁止拼装SPARQL。
 - **Integration层**：HTTP调用、异常处理、超时重试、MID映射。
+
+补充边界约束：
+- Runner 不得直接依赖 Integration 层 client（如 `SPARQLClient`）；
+- Runner 需要的图源能力（例如 MID 名称探测）必须经 Provider 抽象暴露（如 `GraphProvider.resolve_mid_names`）。
+
+### 当前烟测指标口径（WebQSP）
+- `cases_with_zero_overlap_selection` 仅统计 `edge_select*` 动作（不包含 `answer*`）。
+- `route_healthy` 判定需同时满足：无异常、全部 `reset_ok`、全部至少一次有效扩展、`mid_exposed=0`、`invalid_action=0`。
+- 结果正确性使用 `answer_hit_rate`（仅在可评估样本上计算）。
 
 ### 子模块AGENTS.md导航
 - [agentic_rag_rl/](agentic_rag_rl/AGENTS.md) - 核心包总览

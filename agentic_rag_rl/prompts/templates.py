@@ -5,13 +5,17 @@ from agentic_rag_rl.contracts import CandidateEdge
 # ========== System & Format Prompts ==========
 SYSTEM_PROMPT = "你是一个在知识图上进行多路径推理的智能助手。"
 ACTION_FORMAT_PROMPT = (
-    "输出必须先在<think></think>中进行逻辑推理，然后给一个动作："
+    "输出必须先在<think></think>中进行逐步思考，然后给一个动作："
     "<edge_select>边1; 边2; ...</edge_select> 或 <answer>答案</answer>。\n"
     "边的格式为：实体A -关系-> 实体B\n"
-    "如需选择多条边，用分号(;)分隔每条边，可选1-3条。"
+    "如需选择多条边，用分号(;)分隔每条边，可选1-3条。\n"
+    "<edge_select>中必须逐字复制<candidate_edges>里的完整边文本，不允许输出“边1/边2/编号”占位词。"
 )
 EDGE_CONSTRAINT_PROMPT = "只能从<candidate_edges>里选择一条或多条边。多条边用分号(;)分隔。"
-DECISION_HINT_PROMPT = "如果信息还不足请选边扩展（建议1-3条）；如果足够请直接回答。"
+DECISION_HINT_PROMPT = (
+    "如果信息还不足请选与最相关的边扩展（建议1-3条）；如果足够请直接回答。\n"
+    "优先选择与问题谓词语义直接匹配的关系；出版、版本、日期、许可证等元数据关系通常不构成最终答案依据。"
+)
 
 # ========== Knowledge Block Templates ==========
 EMPTY_KNOWLEDGE = "<knowledge>当前无活跃路径。</knowledge>"

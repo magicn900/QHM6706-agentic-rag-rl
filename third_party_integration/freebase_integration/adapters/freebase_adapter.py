@@ -61,6 +61,8 @@ class FreebaseAdapter(GraphAdapterProtocol):
         self._noise_filter = NoiseFilter()
         self._max_edges_per_entity = max_edges_per_entity
         self._initialized = False
+        self._mid_to_placeholder: dict[str, str] = {}
+        self._placeholder_counter = 0
 
     async def initialize(self) -> None:
         """初始化适配器"""
@@ -73,6 +75,8 @@ class FreebaseAdapter(GraphAdapterProtocol):
         logger.info("Finalizing FreebaseAdapter")
         # 清理映射器
         self._mid_mapper.clear()
+        self._mid_to_placeholder.clear()
+        self._placeholder_counter = 0
         self._initialized = False
         logger.info("FreebaseAdapter finalized")
 
@@ -195,18 +199,41 @@ class FreebaseAdapter(GraphAdapterProtocol):
         logger.debug(f"Answer question not fully implemented for Freebase: {question}")
         return ""
 
+    async def resolve_mid_names(self, mids: list[str]) -> dict[str, str]:
+        """批量解析 MID 对应名称。
+
+        Args:
+            mids: MID 列表
+
+        Returns:
+            映射字典 {mid: name}
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            return await self._sparql_client.resolve_mid_names(mids)
+        except Exception as e:
+            logger.error(f"Resolve MID names failed: {e}")
+            return {}
+
     def _resolve_mid(self, entity_ref: str) -> str | None:
         """解析实体引用为 MID
         
         Args:
-            entity_ref: 实体引用（可能是 MID 或名称）
+            entity_ref: 实体引用（可能是 MID 或名称，或 g. 开头的全局 ID）
             
         Returns:
             MID 或 None
         """
-        # 如果已经是 MID 格式
-        if entity_ref.startswith("m."):
+        # 如果已经是 MID 格式 (m. 或 g. 开头)
+        if entity_ref.startswith("m.") or entity_ref.startswith("g."):
             return entity_ref
+        
+        # 如果是完整 URI，提取 MID
+        if "freebase.com/ns/" in entity_ref:
+            mid = entity_ref.split("freebase.com/ns/")[-1]
+            return mid
         
         # 尝试从映射器获取
         mids = self._mid_mapper.get_mids(entity_ref)
@@ -234,7 +261,10 @@ class FreebaseAdapter(GraphAdapterProtocol):
             CandidateEdge 列表
         """
         candidate_edges: list[CandidateEdge] = []
-        entity_name = self._mid_mapper.get_name(mid) or entity_ref
+        entity_name = self._normalize_entity_display_name(
+            raw_name=self._mid_mapper.get_name(mid) or entity_ref,
+            mid=mid,
+        )
 
         for edge in raw_edges:
             relation = edge.get("relation", "")
@@ -247,15 +277,28 @@ class FreebaseAdapter(GraphAdapterProtocol):
                 
                 # 提取目标 MID
                 target_mid = self._extract_mid(target_uri)
-                if target_mid:
-                    self._mid_mapper.add_mapping(target_mid, target_name or target_mid)
+                if target_mid and target_name:
+                    self._mid_mapper.add_mapping(target_mid, target_name)
+
+                # 对 Agent 暴露可读名称：优先真实名称，否则分配匿名占位名
+                readable_target_name = str(target_name or "").strip()
+                if self._is_mid_like(readable_target_name):
+                    readable_target_name = ""
+                if not readable_target_name and target_mid:
+                    mapped_name = str(self._mid_mapper.get_name(target_mid) or "").strip()
+                    if mapped_name and not self._is_mid_like(mapped_name):
+                        readable_target_name = mapped_name
+                readable_target_name = self._normalize_entity_display_name(
+                    raw_name=readable_target_name,
+                    mid=target_mid,
+                )
 
                 edge_id = str(uuid.uuid4())[:8]
                 candidate_edges.append(CandidateEdge(
                     edge_id=edge_id,
                     src_name=entity_name,
                     relation=relation,
-                    tgt_name=target_name or target_mid or "",
+                    tgt_name=readable_target_name,
                     direction="forward",
                     internal_src_ref=mid,
                     internal_tgt_ref=target_mid,
@@ -267,13 +310,26 @@ class FreebaseAdapter(GraphAdapterProtocol):
                 
                 # 提取源 MID
                 source_mid = self._extract_mid(source_uri)
-                if source_mid:
-                    self._mid_mapper.add_mapping(source_mid, source_name or source_mid)
+                if source_mid and source_name:
+                    self._mid_mapper.add_mapping(source_mid, source_name)
+
+                # 对 Agent 暴露可读名称：优先真实名称，否则分配匿名占位名
+                readable_source_name = str(source_name or "").strip()
+                if self._is_mid_like(readable_source_name):
+                    readable_source_name = ""
+                if not readable_source_name and source_mid:
+                    mapped_name = str(self._mid_mapper.get_name(source_mid) or "").strip()
+                    if mapped_name and not self._is_mid_like(mapped_name):
+                        readable_source_name = mapped_name
+                readable_source_name = self._normalize_entity_display_name(
+                    raw_name=readable_source_name,
+                    mid=source_mid,
+                )
 
                 edge_id = str(uuid.uuid4())[:8]
                 candidate_edges.append(CandidateEdge(
                     edge_id=edge_id,
-                    src_name=source_name or source_mid or "",
+                    src_name=readable_source_name,
                     relation=relation,
                     tgt_name=entity_name,
                     direction="backward",
@@ -301,6 +357,44 @@ class FreebaseAdapter(GraphAdapterProtocol):
             return mid.rstrip(".")
         
         return None
+
+    @staticmethod
+    def _is_mid_like(name: str) -> bool:
+        """判断字符串是否为 Freebase MID 形态。"""
+        normalized = (name or "").strip()
+        return normalized.startswith("m.") or normalized.startswith("g.")
+
+    def _normalize_entity_display_name(self, *, raw_name: str, mid: str | None) -> str:
+        """标准化实体显示名称。
+
+        规则：
+        1. 有可读名称且非MID形态 -> 直接使用；
+        2. 否则若有MID -> 分配稳定匿名占位名（未知实体#N）；
+        3. 否则 -> 返回通用匿名名称。
+        """
+        normalized = (raw_name or "").strip()
+        if normalized and not self._is_mid_like(normalized):
+            return normalized
+
+        if mid:
+            return self._get_or_create_placeholder(mid)
+
+        return "未知实体"
+
+    def _get_or_create_placeholder(self, mid: str) -> str:
+        """为未命名MID生成稳定匿名占位名。"""
+        stable_mid = (mid or "").strip()
+        if not stable_mid:
+            return "未知实体"
+
+        cached = self._mid_to_placeholder.get(stable_mid)
+        if cached:
+            return cached
+
+        self._placeholder_counter += 1
+        placeholder = f"未知实体#{self._placeholder_counter}"
+        self._mid_to_placeholder[stable_mid] = placeholder
+        return placeholder
 
 
 # ========== 便捷函数 ==========
