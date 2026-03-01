@@ -45,6 +45,7 @@ class WebQSPCase:
     question: str
     topic_entity: str
     expected_answers: list[str]
+    topic_entity_mid: str = ""
 
 
 MID_PATTERN = re.compile(r"\b(?:m|g)\.[a-zA-Z0-9_]+\b")
@@ -78,6 +79,52 @@ def _token_overlap_score(question: str, edge_text: str) -> float:
 
     overlap = len(q_tokens.intersection(edge_tokens))
     return overlap / len(q_tokens)
+
+
+def _resolve_selected_edge_texts(selected_text: str, candidate_edges_text: list[str]) -> list[str]:
+    """将 edge_select 输出解析为真实候选边文本列表。
+
+    支持数字编号（如 1;2）、"边1"、"1." 以及直接边文本。
+    """
+    normalized_text = (selected_text or "").strip()
+    if not normalized_text:
+        return []
+
+    normalized_text = normalized_text.replace("；", ";").replace("，", ",").replace("、", ",")
+    parts = [p.strip() for p in re.split(r"[;,\n]", normalized_text) if p.strip()]
+
+    selected: list[str] = []
+    for part in parts:
+        if part.isdigit():
+            idx = int(part) - 1
+            if 0 <= idx < len(candidate_edges_text):
+                selected.append(candidate_edges_text[idx])
+            continue
+
+        match_edge_num = re.match(r"^边\s*(\d+)$", part)
+        if match_edge_num:
+            idx = int(match_edge_num.group(1)) - 1
+            if 0 <= idx < len(candidate_edges_text):
+                selected.append(candidate_edges_text[idx])
+            continue
+
+        match_num_dot = re.match(r"^(\d+)\.?$", part)
+        if match_num_dot:
+            idx = int(match_num_dot.group(1)) - 1
+            if 0 <= idx < len(candidate_edges_text):
+                selected.append(candidate_edges_text[idx])
+            continue
+
+        if part in candidate_edges_text:
+            selected.append(part)
+
+    unique: list[str] = []
+    seen = set()
+    for text in selected:
+        if text not in seen:
+            seen.add(text)
+            unique.append(text)
+    return unique
 
 
 def _has_noisy_relation(edge_text: str) -> bool:
@@ -149,8 +196,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="指定题号列表，逗号分隔（优先级高于 sample-size）",
     )
     parser.add_argument("--beam-width", type=int, default=3, help="环境 beam_width")
-    parser.add_argument("--max-steps", type=int, default=2, help="每题最多推理步数")
+    parser.add_argument("--max-steps", type=int, default=3, help="每题最多推理步数")
     parser.add_argument("--top-k", type=int, default=8, help="每轮实体召回数量")
+    parser.add_argument("--selection-k", type=int, default=3, help="每步边选择数量目标（0 表示不强制）")
+    parser.add_argument(
+        "--start-mode",
+        choices=["question", "webqsp", "hybrid"],
+        default="question",
+        help="首轮起点模式：question(问题检索) / webqsp(TopicEntity) / hybrid(并行)",
+    )
+    parser.add_argument("--enable-rerank", action="store_true", help="启用候选边重排")
+    parser.add_argument("--rerank-trigger-n", type=int, default=20, help="候选边数量达到该阈值时触发重排")
+    parser.add_argument("--rerank-top-k", type=int, default=12, help="重排后保留的候选边数量")
     parser.add_argument("--policy", choices=["llm", "heuristic"], default="llm", help="动作策略：llm 或 heuristic")
     parser.add_argument("--temperature", type=float, default=0.0, help="LLM 策略温度")
     parser.add_argument(
@@ -195,10 +252,12 @@ def _load_cases(dataset_path: Path) -> list[WebQSPCase]:
         parses = item.get("Parses") or []
 
         topic_entity = ""
+        topic_entity_mid = ""
         expected_answers: list[str] = []
         if parses and isinstance(parses, list):
             first_parse = parses[0] or {}
             topic_entity = str(first_parse.get("TopicEntityName", "")).strip()
+            topic_entity_mid = str(first_parse.get("TopicEntityMid", "")).strip()
 
             answers = first_parse.get("Answers") or []
             for ans in answers:
@@ -213,6 +272,7 @@ def _load_cases(dataset_path: Path) -> list[WebQSPCase]:
                     question=question,
                     topic_entity=topic_entity,
                     expected_answers=expected_answers,
+                    topic_entity_mid=topic_entity_mid,
                 )
             )
 
@@ -242,6 +302,7 @@ async def _run_one_case(
     max_steps: int,
     policy: OpenAIActionPolicy | None,
     print_trace: bool,
+    start_mode: str,
 ) -> dict[str, Any]:
     """执行单题测试并返回结构化结果。"""
     started_at = _now_iso()
@@ -249,6 +310,7 @@ async def _run_one_case(
         "question_id": case.question_id,
         "question": case.question,
         "topic_entity": case.topic_entity,
+        "topic_entity_mid": case.topic_entity_mid,
         "expected_answers_sample": case.expected_answers[:5],
         "started_at": started_at,
         "reset_ok": False,
@@ -263,18 +325,38 @@ async def _run_one_case(
         "answer_hit_ref": "",
         "unknown_mid_refs": [],
         "unknown_name_probe": {},
+        "candidate_truncation_observed": False,
+        "candidate_drop_total": 0,
+        "candidate_drop_max": 0,
+        "candidate_drop_avg": 0.0,
         "history": [],
         "error": "",
     }
 
     try:
-        state = await env.reset(case.question)
+        seed_entities = [case.topic_entity] if case.topic_entity else []
+        seed_mids = [case.topic_entity_mid] if case.topic_entity_mid else []
+        state = await env.reset(
+            case.question,
+            start_mode=start_mode,
+            seed_entities=seed_entities,
+            seed_mids=seed_mids,
+        )
         case_result["reset_ok"] = True
         case_result["initial_candidate_edges_length"] = len(state.candidate_edges)
 
         for _ in range(max_steps):
             if state.done:
                 break
+
+            candidate_total = int(state.candidate_edges_total or 0)
+            candidate_shown = len(state.candidate_edges)
+            candidate_drop = max(candidate_total - candidate_shown, 0)
+
+            case_result["candidate_drop_total"] = int(case_result.get("candidate_drop_total", 0)) + candidate_drop
+            case_result["candidate_drop_max"] = max(int(case_result.get("candidate_drop_max", 0)), candidate_drop)
+            if candidate_drop > 0:
+                case_result["candidate_truncation_observed"] = True
 
             unknown_mid_refs = {
                 (edge.internal_src_ref or "").strip()
@@ -327,10 +409,21 @@ async def _run_one_case(
                 case_result["expanded_once"] = True
 
             current_edges_text = [edge.to_display_text() for edge in state.candidate_edges]
+            selected_edge_texts = (
+                _resolve_selected_edge_texts(selected_text, current_edges_text)
+                if action.edge_select
+                else []
+            )
+            overlap_texts = selected_edge_texts if selected_edge_texts else ([selected_text] if selected_text else [])
+
             mid_in_candidates = any(MID_PATTERN.search(edge_text) for edge_text in current_edges_text)
-            mid_in_selection = bool(MID_PATTERN.search(selected_text))
-            noisy_relation_hit = _has_noisy_relation(selected_text)
-            overlap_score = _token_overlap_score(case.question, selected_text) if selected_text else 0.0
+            mid_in_selection = any(MID_PATTERN.search(edge_text) for edge_text in overlap_texts)
+            noisy_relation_hit = any(_has_noisy_relation(edge_text) for edge_text in overlap_texts)
+            overlap_score = (
+                max(_token_overlap_score(case.question, edge_text) for edge_text in overlap_texts)
+                if overlap_texts
+                else 0.0
+            )
 
             if mid_in_candidates or mid_in_selection:
                 case_result["mid_exposed"] = True
@@ -355,6 +448,10 @@ async def _run_one_case(
                     "mid_in_selection": mid_in_selection,
                     "noisy_relation_hit": noisy_relation_hit,
                     "question_edge_overlap": overlap_score,
+                    "selected_edge_texts": selected_edge_texts,
+                    "candidate_edges_total": candidate_total,
+                    "candidate_edges_shown": candidate_shown,
+                    "candidate_drop_count": candidate_drop,
                     "next_candidate_edges_length": len(result.state.candidate_edges),
                 }
             )
@@ -388,6 +485,12 @@ async def _run_one_case(
         case_result["answer_hit"] = hit
         case_result["answer_hit_ref"] = hit_ref
 
+        if case_result["step_count"] > 0:
+            case_result["candidate_drop_avg"] = round(
+                float(case_result.get("candidate_drop_total", 0)) / float(case_result["step_count"]),
+                4,
+            )
+
         case_result["final_done"] = state.done
         case_result["finished_at"] = _now_iso()
         return case_result
@@ -408,6 +511,9 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     mid_exposed = sum(1 for item in results if item.get("mid_exposed"))
     noisy_relation_hit = sum(1 for item in results if item.get("noisy_relation_hit"))
     zero_overlap_selected = sum(1 for item in results if item.get("zero_overlap_selected"))
+    truncation_observed_cases = sum(1 for item in results if item.get("candidate_truncation_observed"))
+    candidate_drop_total = sum(int(item.get("candidate_drop_total") or 0) for item in results)
+    candidate_drop_avg = (candidate_drop_total / total) if total > 0 else 0.0
     invalid_action_cases = sum(
         1
         for item in results
@@ -443,6 +549,9 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "cases_with_mid_exposure": mid_exposed,
         "cases_with_noisy_relation_selected": noisy_relation_hit,
         "cases_with_zero_overlap_selection": zero_overlap_selected,
+        "cases_with_candidate_truncation": truncation_observed_cases,
+        "candidate_drop_total": candidate_drop_total,
+        "candidate_drop_avg_per_case": round(candidate_drop_avg, 4),
         "cases_with_invalid_action": invalid_action_cases,
         "unknown_mid_total": unknown_mid_total,
         "unknown_mid_resolved": unknown_mid_resolved,
@@ -495,12 +604,17 @@ async def run_smoke(args: argparse.Namespace) -> int:
         max_steps=args.max_steps,
         top_k=args.top_k,
         answer_mode="hybrid",
+        selection_k=args.selection_k,
+        enable_rerank=args.enable_rerank,
+        rerank_trigger_n=args.rerank_trigger_n,
+        rerank_top_k=args.rerank_top_k,
     )
 
     print("[INFO] WebQSP Freebase 烟测开始")
     print(f"[INFO] 数据集: {dataset_path}")
     print(f"[INFO] 测试题数: {len(selected)}")
     print(f"[INFO] 决策策略: {args.policy}")
+    print(f"[INFO] 起点模式: {args.start_mode}")
     print(f"[INFO] Freebase /search 超时: {args.search_timeout}s, /sparql 超时: {args.sparql_timeout}s")
 
     results: list[dict[str, Any]] = []
@@ -519,6 +633,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 max_steps=args.max_steps,
                 policy=policy,
                 print_trace=args.print_trace,
+                start_mode=args.start_mode,
             )
 
             if not args.disable_unknown_probe:
@@ -577,6 +692,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
             "beam_width": args.beam_width,
             "max_steps": args.max_steps,
             "top_k": args.top_k,
+            "selection_k": args.selection_k,
+            "start_mode": args.start_mode,
+            "enable_rerank": args.enable_rerank,
+            "rerank_trigger_n": args.rerank_trigger_n,
+            "rerank_top_k": args.rerank_top_k,
             "policy": args.policy,
             "temperature": args.temperature,
             "print_trace": args.print_trace,

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -355,18 +356,35 @@ class SPARQLClient:
         Returns:
             仅包含成功解析项的映射字典 {mid: name}
         """
-        uniq_mids = [mid.strip() for mid in dict.fromkeys(mids) if mid and mid.strip()]
+        uniq_mids = [
+            mid.strip()
+            for mid in dict.fromkeys(mids)
+            if mid and mid.strip() and re.fullmatch(r"[mg]\.[A-Za-z0-9_]+", mid.strip())
+        ]
         if not uniq_mids:
             return {}
 
         values = " ".join(f"ns:{mid}" for mid in uniq_mids)
         sparql = f"""
         PREFIX ns: <http://rdf.freebase.com/ns/>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?mid ?name
         WHERE {{
             VALUES ?mid {{ {values} }}
-            ?mid ns:type.object.name ?name .
-            FILTER(lang(?name) = '' || langMatches(lang(?name), 'en'))
+            OPTIONAL {{
+                ?mid ns:type.object.name ?nameFb .
+                FILTER(lang(?nameFb) = '' || langMatches(lang(?nameFb), 'en'))
+            }}
+            OPTIONAL {{
+                ?mid rdfs:label ?nameRdfs .
+                FILTER(lang(?nameRdfs) = '' || langMatches(lang(?nameRdfs), 'en'))
+            }}
+            OPTIONAL {{
+                ?mid ns:common.topic.alias ?nameAlias .
+                FILTER(lang(?nameAlias) = '' || langMatches(lang(?nameAlias), 'en'))
+            }}
+            BIND(COALESCE(?nameFb, ?nameRdfs, ?nameAlias) AS ?name)
+            FILTER(BOUND(?name))
         }}
         """
 
@@ -388,5 +406,62 @@ class SPARQLClient:
 
             if mid and mid not in resolved:
                 resolved[mid] = name
+
+        unresolved = [mid for mid in uniq_mids if mid not in resolved]
+        if not unresolved:
+            return resolved
+
+        fallback_values = " ".join(f"ns:{mid}" for mid in unresolved)
+        fallback_sparql = f"""
+        PREFIX ns: <http://rdf.freebase.com/ns/>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT ?mid (SAMPLE(?fallbackName) AS ?name)
+        WHERE {{
+            VALUES ?mid {{ {fallback_values} }}
+            {{
+                ?mid ?p ?neighbor .
+                FILTER(STRSTARTS(STR(?neighbor), "http://rdf.freebase.com/ns/"))
+            }}
+            UNION
+            {{
+                ?neighbor ?p ?mid .
+                FILTER(STRSTARTS(STR(?neighbor), "http://rdf.freebase.com/ns/"))
+            }}
+
+            OPTIONAL {{
+                ?neighbor ns:type.object.name ?neighborNameFb .
+                FILTER(lang(?neighborNameFb) = '' || langMatches(lang(?neighborNameFb), 'en'))
+            }}
+            OPTIONAL {{
+                ?neighbor rdfs:label ?neighborNameRdfs .
+                FILTER(lang(?neighborNameRdfs) = '' || langMatches(lang(?neighborNameRdfs), 'en'))
+            }}
+            OPTIONAL {{
+                ?neighbor ns:common.topic.alias ?neighborAlias .
+                FILTER(lang(?neighborAlias) = '' || langMatches(lang(?neighborAlias), 'en'))
+            }}
+
+            BIND(COALESCE(?neighborNameFb, ?neighborNameRdfs, ?neighborAlias) AS ?fallbackName)
+            FILTER(BOUND(?fallbackName))
+        }}
+        GROUP BY ?mid
+        """
+
+        fallback_result = await self.query(fallback_sparql)
+        fallback_bindings = fallback_result.get("results", {}).get("bindings", [])
+        for item in fallback_bindings:
+            mid_uri = item.get("mid", {}).get("value", "")
+            name = item.get("name", {}).get("value", "").strip()
+            if not mid_uri or not name:
+                continue
+
+            mid = ""
+            if "/ns/" in mid_uri:
+                mid = mid_uri.split("/ns/")[-1].strip()
+            elif mid_uri.startswith("m.") or mid_uri.startswith("g."):
+                mid = mid_uri.strip()
+
+            if mid and mid not in resolved:
+                resolved[mid] = f"[{name}]"
 
         return resolved

@@ -28,7 +28,7 @@ from ..contracts import (
 )
 from ..prompts import EMPTY_KNOWLEDGE, format_knowledge_body
 from ..providers import GraphProvider
-from ..utils.embedding_pruner import EmbeddingPruner
+from ..utils import EdgeReranker, EmbeddingPruner
 
 
 class EdgeSelectionEnv:
@@ -47,13 +47,22 @@ class EdgeSelectionEnv:
         max_steps: int = 4,
         top_k: int = 20,
         answer_mode: str = "hybrid",
+        selection_k: int = 0,
+        enable_rerank: bool = False,
+        rerank_trigger_n: int = 20,
+        rerank_top_k: int = 12,
     ) -> None:
         self.provider = provider
         self.beam_width = beam_width
         self.max_steps = max_steps
         self.top_k = top_k
         self.answer_mode = answer_mode
+        self.selection_k = max(selection_k, 0)
+        self.enable_rerank = enable_rerank
+        self.rerank_trigger_n = max(rerank_trigger_n, 1)
+        self.rerank_top_k = max(rerank_top_k, 1)
         self.pruner = EmbeddingPruner()
+        self.reranker = EdgeReranker()
 
         self._question = ""
         self._step_index = 0
@@ -62,28 +71,64 @@ class EdgeSelectionEnv:
         self._active_paths: list[PathTrace] = []
         self._snapshot: SeedSnapshot | None = None
         self._candidate_edges: list[CandidateEdge] = []  # 当前候选边
+        self._candidate_edges_total: int = 0
 
-    async def reset(self, question: str) -> EdgeEnvState:
-        """重置环境到初始状态
-        
+    async def reset(
+        self,
+        question: str,
+        *,
+        start_mode: str | None = None,
+        seed_entities: list[str] | None = None,
+        seed_mids: list[str] | None = None,
+    ) -> EdgeEnvState:
+        """重置环境到初始状态。
+
+        默认保持历史行为：未提供起始点时走 question 检索。
+        若提供起始点且未显式指定 start_mode，则自动切换到 webqsp。
+
         Args:
             question: 用户问题
-            
+            start_mode: question/webqsp/hybrid/auto 或 None
+            seed_entities: 显式起始实体名列表
+            seed_mids: 显式起始 MID 列表
+
         Returns:
             EdgeEnvState: 初始环境状态
         """
+        has_seed = bool(seed_entities or seed_mids)
+
+        normalized_mode = (start_mode or "auto").strip().lower()
+        if normalized_mode == "auto":
+            normalized_mode = "webqsp" if has_seed else "question"
+        if normalized_mode not in {"question", "webqsp", "hybrid"}:
+            normalized_mode = "question"
+
         self._question = question.strip()
         self._step_index = 0
         self._done = False
         self._history = []
 
-        # 获取 provider 的快照
-        snapshot = await self.provider.get_snapshot(question=self._question, top_k=self.top_k)
+        hl_keywords: list[str] = [f"__start_mode__:{normalized_mode}"]
+        if normalized_mode in {"webqsp", "hybrid"}:
+            for mid in seed_mids or []:
+                normalized_mid = (mid or "").strip()
+                if normalized_mid:
+                    hl_keywords.append(f"mid:{normalized_mid}")
+            for name in seed_entities or []:
+                normalized_name = (name or "").strip()
+                if normalized_name:
+                    hl_keywords.append(f"name:{normalized_name}")
+
+        snapshot = await self.provider.get_snapshot(
+            question=self._question,
+            top_k=self.top_k,
+            hl_keywords=hl_keywords,
+        )
         self._snapshot = snapshot
-        
+
         # 收集 provider 返回的候选边
-        self._candidate_edges = self._convert_edges(snapshot)
-        
+        await self._refresh_candidate_edges(snapshot)
+
         # 初始化活跃路径（从召回的实体出发）
         self._active_paths = [
             PathTrace(nodes=[entity_name], relations=[], score=0.0)
@@ -92,6 +137,22 @@ class EdgeSelectionEnv:
         self._active_paths = await self._prune_paths(self._active_paths)
 
         return self._build_state()
+
+    async def reset_with_starting_points(
+        self,
+        question: str,
+        *,
+        start_mode: str = "question",
+        seed_entities: list[str] | None = None,
+        seed_mids: list[str] | None = None,
+    ) -> EdgeEnvState:
+        """兼容旧调用：转发到 reset。"""
+        return await self.reset(
+            question,
+            start_mode=start_mode,
+            seed_entities=seed_entities,
+            seed_mids=seed_mids,
+        )
 
     async def step(self, action: EdgeEnvAction) -> StepResult:
         """执行一步动作
@@ -138,6 +199,9 @@ class EdgeSelectionEnv:
 
         # 解析选中的边（支持多边，用分号分隔）
         selected_edges = self._parse_edge_selection(edge_text)
+
+        # 选边策略：候选不足时全选，候选充足时对齐 selection_k
+        selected_edges, selection_meta = self._apply_selection_policy(selected_edges)
         if not selected_edges:
             return StepResult(
                 state=self._build_state(),
@@ -147,10 +211,15 @@ class EdgeSelectionEnv:
             )
 
         # 执行边扩展
-        result = await self._expand_with_edges(selected_edges)
+        result = await self._expand_with_edges(selected_edges, selection_meta=selection_meta)
         return result
 
-    async def _expand_with_edges(self, selected_edges: list[CandidateEdge]) -> StepResult:
+    async def _expand_with_edges(
+        self,
+        selected_edges: list[CandidateEdge],
+        *,
+        selection_meta: dict[str, int | bool] | None = None,
+    ) -> StepResult:
         """使用选中的边扩展图
         
         Args:
@@ -171,16 +240,19 @@ class EdgeSelectionEnv:
         cycle_pruned = 0
         new_keywords: list[str] = []
 
-        # 多边分叉扩展
-        for edge in selected_edges:
-            tail = edge.tgt_name if edge.direction == "forward" else edge.src_name
-            
-            for path in self._active_paths:
+        # 多边分叉扩展（边-路径可达性约束）
+        for path in self._active_paths:
+            for edge in selected_edges:
+                if not self._is_edge_reachable_from_path(edge=edge, path=path):
+                    continue
+
+                tail = self._edge_next_entity(edge)
+
                 # 检查是否形成环
                 if tail and tail in path.nodes:
                     cycle_pruned += 1
                     continue
-                
+
                 # 扩展路径（relation 使用纯关系名，用于 to_text() 显示）
                 expanded_paths.append(
                     path.extend(
@@ -189,7 +261,7 @@ class EdgeSelectionEnv:
                         score_delta=edge.weight,
                     )
                 )
-                
+
                 # 收集关键词用于下一轮查询
                 if edge.keywords:
                     new_keywords.extend([k.strip() for k in edge.keywords.split(",") if k.strip()])
@@ -213,11 +285,7 @@ class EdgeSelectionEnv:
         )
 
         # 更新候选边
-        converted_edges = self._convert_edges(self._snapshot)
-        selected_texts = {edge.to_display_text() for edge in selected_edges}
-        self._candidate_edges = [edge for edge in converted_edges if edge.to_display_text() not in selected_texts]
-        if not self._candidate_edges:
-            self._candidate_edges = converted_edges
+        await self._refresh_candidate_edges(self._snapshot, selected_edges=selected_edges)
 
         # 剪枝活跃路径
         self._active_paths = await self._prune_paths(expanded_paths)
@@ -241,8 +309,12 @@ class EdgeSelectionEnv:
         info = {
             "edges_selected": [e.edge_id for e in selected_edges],
             "edges_count": len(selected_edges),
+            "effective_edges_count": len(selected_edges),
             "frontier_count": len(frontier),
             "cycle_pruned": cycle_pruned,
+            "selection_k": self.selection_k,
+            "auto_selected_all": bool((selection_meta or {}).get("auto_selected_all", False)),
+            "auto_filled_edges": int((selection_meta or {}).get("auto_filled_edges", 0)),
         }
         
         if fallback_answer is not None:
@@ -278,13 +350,31 @@ class EdgeSelectionEnv:
         """
         selected: list[CandidateEdge] = []
         
-        # 先尝试按分号分割
-        parts = [p.strip() for p in edge_text.split(";") if p.strip()]
+        normalized_text = (edge_text or "").strip()
+        normalized_text = normalized_text.replace("；", ";").replace("，", ",").replace("、", ",")
+
+        # 先尝试按分号/逗号/换行分割
+        parts = [p.strip() for p in re.split(r"[;,\n]", normalized_text) if p.strip()]
         
         for part in parts:
             # 尝试解析为数字索引
             if part.isdigit():
                 idx = int(part) - 1  # 转换为 0 索引
+                if 0 <= idx < len(self._candidate_edges):
+                    selected.append(self._candidate_edges[idx])
+                continue
+
+            # 支持“边1”或“1.”
+            match_edge_num = re.match(r"^边\s*(\d+)$", part)
+            if match_edge_num:
+                idx = int(match_edge_num.group(1)) - 1
+                if 0 <= idx < len(self._candidate_edges):
+                    selected.append(self._candidate_edges[idx])
+                continue
+
+            match_num_dot = re.match(r"^(\d+)\.?$", part)
+            if match_num_dot:
+                idx = int(match_num_dot.group(1)) - 1
                 if 0 <= idx < len(self._candidate_edges):
                     selected.append(self._candidate_edges[idx])
                 continue
@@ -312,6 +402,89 @@ class EdgeSelectionEnv:
                 unique.append(e)
         
         return unique
+
+    def _apply_selection_policy(self, selected_edges: list[CandidateEdge]) -> tuple[list[CandidateEdge], dict[str, int | bool]]:
+        """应用每步选边数量策略。"""
+        target = self.selection_k
+        meta: dict[str, int | bool] = {
+            "auto_selected_all": False,
+            "auto_filled_edges": 0,
+        }
+
+        if target <= 0:
+            return selected_edges, meta
+
+        # 当候选边不足 selection_k，且动作是 edge_select，直接全选
+        if self._candidate_edges and len(self._candidate_edges) <= target:
+            meta["auto_selected_all"] = True
+            return list(self._candidate_edges), meta
+
+        if not selected_edges:
+            return [], meta
+
+        trimmed = list(selected_edges[:target])
+        if len(trimmed) < target:
+            selected_ids = {edge.edge_id for edge in trimmed}
+            for edge in self._candidate_edges:
+                if edge.edge_id in selected_ids:
+                    continue
+                trimmed.append(edge)
+                selected_ids.add(edge.edge_id)
+                meta["auto_filled_edges"] = int(meta["auto_filled_edges"]) + 1
+                if len(trimmed) >= target:
+                    break
+
+        return trimmed[:target], meta
+
+    @staticmethod
+    def _edge_start_entity(edge: CandidateEdge) -> str:
+        """返回边扩展时的起始实体（需与路径尾实体匹配）。"""
+        if edge.direction == "forward":
+            return edge.src_name
+        return edge.tgt_name
+
+    @staticmethod
+    def _edge_next_entity(edge: CandidateEdge) -> str:
+        """返回边扩展时的下一跳实体。"""
+        if edge.direction == "forward":
+            return edge.tgt_name
+        return edge.src_name
+
+    def _is_edge_reachable_from_path(self, *, edge: CandidateEdge, path: PathTrace) -> bool:
+        """判断候选边是否可从当前路径末端扩展。"""
+        tail = (path.tail_entity or "").strip()
+        start = (self._edge_start_entity(edge) or "").strip()
+        if not tail or not start:
+            return False
+        return tail == start
+
+    async def _refresh_candidate_edges(
+        self,
+        snapshot: SeedSnapshot,
+        *,
+        selected_edges: list[CandidateEdge] | None = None,
+    ) -> None:
+        """刷新候选边：排序 -> 可选重排 -> Top-K 剪枝 -> 去除已选。"""
+        converted_edges = self._convert_edges(snapshot)
+        self._candidate_edges_total = len(converted_edges)
+
+        ranked_edges = converted_edges
+        rerank_applied = False
+        if self.enable_rerank and len(ranked_edges) >= self.rerank_trigger_n:
+            ranked_edges = await self.reranker.rank(self._question, ranked_edges)
+            rerank_applied = True
+
+        # 仅在触发重排后应用 rerank_top_k，避免常规路径下过早截断候选边。
+        if rerank_applied and len(ranked_edges) > self.rerank_top_k:
+            ranked_edges = ranked_edges[: self.rerank_top_k]
+
+        if selected_edges:
+            selected_texts = {edge.to_display_text() for edge in selected_edges}
+            filtered_edges = [edge for edge in ranked_edges if edge.to_display_text() not in selected_texts]
+            self._candidate_edges = filtered_edges if filtered_edges else ranked_edges
+            return
+
+        self._candidate_edges = ranked_edges
 
     def _convert_edges(self, snapshot: SeedSnapshot) -> list[CandidateEdge]:
         """将 provider 返回的 CandidateEdge 收集为列表
@@ -393,7 +566,59 @@ class EdgeSelectionEnv:
         if any(marker in relation for marker in metadata_markers):
             score -= 0.8
 
+        # 问句意图增强（地点/时间/职位/政党）
+        if any(word in question for word in ["where", "located", "location", "border", "country", "state", "city"]):
+            if any(word in relation for word in ["location.", "containedby", "country", "place_of", "region", "timezone", "time_zone"]):
+                score += 1.8
+
+        if any(word in question for word in ["when", "year", "date", "born", "died"]):
+            if any(word in relation for word in ["date", "start_date", "end_date", "time", "birth", "death", "inauguration"]):
+                score += 2.0
+
+        if any(word in question for word in ["who", "leader", "governor", "husband", "wife", "mom", "mother", "father"]):
+            if any(word in relation for word in ["office_holders", "spouse", "parents", "children", "person", "actor"]):
+                score += 1.6
+
+        if "party" in question and any(word in relation for word in ["political", "party", "ideology", "affiliation"]):
+            score += 2.2
+
+        # 对与问题意图明显不匹配的高噪声域做强降权（不直接删除，仅压后）
+        if self._is_noisy_relation_for_question(question=question, relation=relation):
+            score -= 2.4
+
         return score
+
+    def _is_noisy_relation_for_question(self, *, question: str, relation: str) -> bool:
+        """判断关系是否是当前问句下的噪声域关系。"""
+        relation = relation.lower()
+        question = question.lower()
+
+        # 若用户问题本身是媒体/出版领域，避免误伤对应关系
+        media_q = any(k in question for k in [
+            "music", "song", "album", "track", "singer", "band",
+            "book", "novel", "author", "publisher",
+            "movie", "film", "actor", "actress", "director",
+            "tv", "episode", "series",
+        ])
+
+        noisy_prefixes = [
+            "music.",
+            "book.",
+            "tv.tv_series_episode",
+            "type.user.",
+            "base.wordnet",
+            "common.licensed_object",
+            "cvg.",
+            "pipeline.",
+        ]
+        hit_noisy = any(relation.startswith(prefix) for prefix in noisy_prefixes)
+        if not hit_noisy:
+            return False
+
+        if media_q:
+            return False
+
+        return True
 
     async def _generate_fallback_answer(self) -> str:
         """生成回退答案（达到最大步数时）"""
@@ -492,6 +717,8 @@ class EdgeSelectionEnv:
             active_paths=self._active_paths,
             history=list(self._history),
             step_index=self._step_index,
+            selection_k=self.selection_k,
+            candidate_edges_total=self._candidate_edges_total,
             done=self._done if done_override is None else done_override,
         )
 

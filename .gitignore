@@ -201,3 +201,6 @@ agentic_rag_rl/temp/
 
 # data files
 data/
+
+# report output
+reports/

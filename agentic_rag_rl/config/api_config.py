@@ -38,6 +38,10 @@ def _load_project_envs() -> str:
 
 @dataclass(slots=True)
 class CoreAPIConfig:
+    # Rerank配置
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_base_url: str | None = None
+    rerank_api_key: str | None = None
     # LLM配置
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
@@ -127,6 +131,9 @@ class CoreAPIConfig:
             embed_dim=int(os.getenv("AGENTIC_RAG_EMBED_DIM") or os.getenv("LIGHTRAG_EMBED_DIM", "1536")),
             embed_base_url=embed_base_url,
             embed_api_key=embed_api_key,
+            rerank_model=os.getenv("AGENTIC_RAG_RERANK_MODEL") or "BAAI/bge-reranker-v2-m3",
+            rerank_base_url=os.getenv("AGENTIC_RAG_RERANK_BASE_URL") or llm_base_url,
+            rerank_api_key=os.getenv("AGENTIC_RAG_RERANK_API_KEY") or llm_api_key,
             action_model=os.getenv("AGENTIC_RAG_ACTION_MODEL") or os.getenv("ACTION_LLM_MODEL") or os.getenv("LIGHTRAG_LLM_MODEL", "gpt-4o-mini"),
             action_base_url=action_base_url,
             action_api_key=action_api_key,
@@ -154,3 +161,7 @@ class CoreAPIConfig:
     @property
     def has_action_credentials(self) -> bool:
         return bool(self.action_api_key)
+
+    @property
+    def has_rerank_credentials(self) -> bool:
+        return bool(self.rerank_api_key)

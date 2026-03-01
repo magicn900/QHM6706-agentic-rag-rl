@@ -57,7 +57,18 @@ class FreebaseGraphProvider(GraphProvider):
             标准化 SeedSnapshot。
         """
         entity_edges: dict[str, list[CandidateEdge]] = defaultdict(list)
-        search_queries = self._build_search_queries(question)
+
+        start_mode, seed_mids, seed_names = self._parse_starting_hints(hl_keywords)
+        if start_mode == "webqsp" and not seed_mids and not seed_names:
+            start_mode = "question"
+
+        search_queries: list[str] = []
+        if start_mode in {"question", "hybrid"}:
+            search_queries.extend(self._build_search_queries(question))
+        if start_mode in {"webqsp", "hybrid"}:
+            for name in seed_names:
+                if name and name not in search_queries:
+                    search_queries.append(name)
 
         # 多查询合并，降低长问句直接检索带来的歧义
         merged_entities: list[dict[str, object]] = []
@@ -78,7 +89,25 @@ class FreebaseGraphProvider(GraphProvider):
             if len(merged_entities) >= top_k:
                 break
 
-        entities = merged_entities
+        entities = self._rank_entities_by_context(
+            entities=merged_entities,
+            question=question,
+            seed_names=seed_names,
+        )[:top_k]
+
+        # 对显式 MID 起点做直接扩展，避免完全依赖文本实体检索
+        if seed_mids:
+            resolved_name_map = await self.resolve_mid_names(seed_mids)
+            for seed_mid in seed_mids:
+                expanded = await self._adapter.expand_edges(
+                    seed_mid,
+                    direction="forward",
+                    max_edges=min(top_k, 20),
+                )
+                if not expanded:
+                    continue
+                entity_name = resolved_name_map.get(seed_mid) or seed_mid
+                entity_edges[entity_name].extend(expanded)
 
         for entity in entities:
             entity_name = str(entity.get("name", "")).strip()
@@ -107,11 +136,15 @@ class FreebaseGraphProvider(GraphProvider):
             # 过滤掉看起来像关系名的关键词（包含 '.' 但不是有效的 Freebase MID）
             # 关系名格式如 "book.book.editions"，不能用于实体扩展
             valid_keywords = [
-                k.strip()
+                token
                 for k in ll_keywords
-                if k.strip()
-                and not ("." in k and not k.startswith("m."))
-                and not k.strip().isdigit()
+                for token in [k.strip()]
+                if token
+                and not self._is_placeholder_name(token)
+                and not self._looks_like_relation_name(token)
+                and not token.isdigit()
+                and len(token) >= 2
+                and token.lower() not in {"actor", "male", "female", "person", "people"}
             ]
             for keyword in valid_keywords:
                 for edge in await self._adapter.expand_edges(keyword, direction="forward", max_edges=8):
@@ -129,11 +162,46 @@ class FreebaseGraphProvider(GraphProvider):
                 "source": "freebase",
                 "entities_count": len(entities),
                 "search_queries": search_queries,
+                "start_mode": start_mode,
+                "seed_mids": seed_mids,
+                "seed_names": seed_names,
             },
             raw_data={
                 "entities": entities,
             },
         )
+
+    @staticmethod
+    def _parse_starting_hints(hl_keywords: list[str] | None) -> tuple[str, list[str], list[str]]:
+        """解析高层关键词中的起点策略提示。"""
+        start_mode = "question"
+        seed_mids: list[str] = []
+        seed_names: list[str] = []
+
+        for item in hl_keywords or []:
+            token = (item or "").strip()
+            if not token:
+                continue
+
+            if token.startswith("__start_mode__:"):
+                candidate = token.split(":", 1)[1].strip().lower()
+                if candidate in {"question", "webqsp", "hybrid"}:
+                    start_mode = candidate
+                continue
+
+            if token.startswith("mid:"):
+                mid = token.split(":", 1)[1].strip()
+                if mid and mid not in seed_mids:
+                    seed_mids.append(mid)
+                continue
+
+            if token.startswith("name:"):
+                name = token.split(":", 1)[1].strip()
+                if name and name not in seed_names:
+                    seed_names.append(name)
+                continue
+
+        return start_mode, seed_mids, seed_names
 
     def _build_search_queries(self, question: str) -> list[str]:
         """从问题构建多条实体检索查询。
@@ -180,6 +248,70 @@ class FreebaseGraphProvider(GraphProvider):
                 queries.append(chunk)
 
         return queries[:4]
+
+    def _rank_entities_by_context(
+        self,
+        *,
+        entities: list[dict[str, object]],
+        question: str,
+        seed_names: list[str],
+    ) -> list[dict[str, object]]:
+        """按问题与起点上下文重排实体，降低同名实体误命中。"""
+        if not entities:
+            return entities
+
+        q_tokens = {
+            token
+            for token in re.findall(r"[a-zA-Z0-9']+", (question or "").lower())
+            if len(token) >= 2
+        }
+        seed_tokens = {
+            token
+            for seed_name in seed_names
+            for token in re.findall(r"[a-zA-Z0-9']+", (seed_name or "").lower())
+            if len(token) >= 2
+        }
+
+        scored: list[tuple[float, int, dict[str, object]]] = []
+        for idx, entity in enumerate(entities):
+            name = str(entity.get("name", "") or "")
+            name_tokens = {
+                token
+                for token in re.findall(r"[a-zA-Z0-9']+", name.lower())
+                if len(token) >= 2
+            }
+
+            overlap_q = len(name_tokens.intersection(q_tokens)) if q_tokens else 0
+            overlap_seed = len(name_tokens.intersection(seed_tokens)) if seed_tokens else 0
+            exact_seed = 1.0 if any(name.lower() == (seed or "").lower() for seed in seed_names) else 0.0
+
+            score = float(overlap_q) + float(overlap_seed) * 1.5 + exact_seed * 2.0
+            scored.append((score, idx, entity))
+
+        scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        return [item[2] for item in scored]
+
+    @staticmethod
+    def _is_placeholder_name(name: str) -> bool:
+        normalized = (name or "").strip().lower()
+        return normalized == "未知实体" or normalized.startswith("未知实体#")
+
+    @staticmethod
+    def _looks_like_relation_name(token: str) -> bool:
+        """判断 token 是否更像关系名而非实体名。"""
+        normalized = (token or "").strip()
+        if not normalized:
+            return False
+
+        # Freebase MID 允许 m./g.，不应被误判为关系
+        if normalized.startswith("m.") or normalized.startswith("g."):
+            return False
+
+        # 包含多段点分结构通常是关系名，如 people.person.parents
+        if normalized.count(".") >= 1 and re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_\.]*", normalized):
+            return True
+
+        return False
 
     async def answer(self, question: str, *, mode: str = "hybrid") -> str:
         """调用 Freebase 适配器问答兜底接口。"""

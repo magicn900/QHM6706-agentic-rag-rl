@@ -85,6 +85,8 @@ class EdgeEnvState:
     active_paths: list[PathTrace]
     history: list[dict[str, str]]
     step_index: int
+    selection_k: int = 0
+    candidate_edges_total: int = 0
     done: bool = False
 
     def get_candidate_edges_text(self) -> str:
