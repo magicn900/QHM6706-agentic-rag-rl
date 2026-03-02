@@ -73,6 +73,18 @@ On success, the summary should show `route_healthy: true`, and a report will be 
 
 `agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
 
+## Frontend Demo
+
+A simple demo UI is provided in the root folder `frontend/`.
+
+Run from repository root:
+
+```bash
+streamlit run frontend/app.py
+```
+
+The page supports quick-fill from showcase cases and live step-by-step trace visualization (context, model output, action, and env feedback).
+
 ## Use Cases
 
 - Multi-hop knowledge graph QA (e.g., WebQSP)

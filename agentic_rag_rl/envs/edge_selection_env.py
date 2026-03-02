@@ -727,11 +727,11 @@ class EdgeSelectionEnv:
         if not self._active_paths:
             return EMPTY_KNOWLEDGE
 
-        lines = [f"当前有 {len(self._active_paths)} 条活跃路径：", ""]
+        lines = [f"There are {len(self._active_paths)} active paths:", ""]
         for idx, path in enumerate(self._active_paths, start=1):
             if path.relations:
-                lines.append(f"- 路径{idx}：{path.to_text()}（末端：{path.tail_entity}）")
+                lines.append(f"- Path {idx}: {path.to_text()} (tail: {path.tail_entity})")
             else:
-                lines.append(f"- 路径{idx}：从 {path.tail_entity} 出发，暂无扩展。")
+                lines.append(f"- Path {idx}: start from {path.tail_entity}, no expansion yet.")
 
         return format_knowledge_body(lines)
