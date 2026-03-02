@@ -1,186 +1,85 @@
-# QHM6706-agentic-rag-rl
+# Agentic-RAG-RL
 
-## Core Environment Layer
+A project for knowledge-graph question answering with an **Agentic RAG + RL-style environment** design.
 
-The core agent environment is implemented as a first-class project package:
+This project models multi-hop QA as an interactive environment (Env). At each step, the agent selects actions from candidate graph edges (`edge_select`), incrementally expands reasoning paths, and produces an answer. The main pipeline has been migrated to the `edge_select` architecture and supports switching between LightRAG and Freebase graph providers.
 
-- Core root: `agentic_rag_rl/`
-- Purpose: environment contracts, multi-path relation-selection environment, pruning logic, and runner interfaces
-- Provider model: core environment depends on provider abstraction only
-- LightRAG role: one concrete provider implementation via integration factory, not the core environment itself
+## Project Goals
 
-Quick run (core env + LightRAG provider):
+- Convert multi-hop KGQA into a unified environment interface that is trainable, evaluable, and provider-switchable
+- Replace one-shot black-box generation with structured actions (edge selection / answer) for better interpretability
+- Provide a reusable experimental foundation for RL training, policy comparison, and route diagnostics
 
-```powershell
-conda activate agentic-rl
-python -m agentic_rag_rl.runners.relation_env_demo --question "What is mascot Phillie Phanatic's team's spring training stadium?"
+## Core Features
+
+- **Unified environment interface**: reset/step interaction based on `EdgeSelectionEnv`
+- **Edge-level action space**: the agent directly selects full edge text in the form `A -relation-> B`
+- **Pluggable providers**: switch between `lightrag` and `freebase` via factory-based providers
+- **Decoupled external services**: Freebase is integrated through `/search` + `/sparql` HTTP endpoints
+- **Engineering smoke tests**: built-in demo/smoke scripts for quick pipeline health checks
+
+## Project Structure (Simplified)
+
+```text
+agentic_rag_rl/
+  contracts/   # actions, states, graph adapter protocols
+  envs/        # EdgeSelectionEnv core logic
+  policies/    # LLM action policy and parsing
+  prompts/     # prompt templates
+  providers/   # graph providers and factory
+  runners/     # demo and smoke scripts
+
+third_party_integration/
+  lightrag_integration/
+  freebase_integration/
 ```
+
+## Quick Start
+
+### 1) Create environment
 
 ```bash
+conda env create -f environment.yml
 conda activate agentic-rl
-python -m agentic_rag_rl.runners.relation_env_demo --question "What is mascot Phillie Phanatic's team's spring training stadium?"
 ```
 
-Success marker:
+### 2) Configure API (recommended: create `.env` in repo root)
 
-- `[OK] Core relation env episode passed.`
+Minimal example:
 
-### Relation env behavior notes
-
-- Cycle handling: path expansion prunes candidates when the next entity already exists in the same path (avoid loop expansion).
-- Max-step fallback: when `max_steps` is reached without explicit `<answer>`, env auto-generates a fallback answer via provider query; if provider fails, it returns a knowledge-based baseline response.
-- Runtime trace fields: step info includes `cycle_pruned`; max-step termination includes `reason=max_steps_reached`, `final_answer`, and `auto_generated=true`.
-
-### Core API Config (preferred)
-
-Core environment now supports project-owned API config envs (preferred):
-
-- Preferred local file: `agentic_rag_rl/.env` (template: `agentic_rag_rl/.env.example`)
-
-- `AGENTIC_RAG_LLM_API_KEY`
-- `AGENTIC_RAG_LLM_BASE_URL`
-- `AGENTIC_RAG_LLM_MODEL`
-- `AGENTIC_RAG_EMBED_API_KEY`
-- `AGENTIC_RAG_EMBED_BASE_URL`
-- `AGENTIC_RAG_EMBED_MODEL`
-- `AGENTIC_RAG_ACTION_API_KEY`
-- `AGENTIC_RAG_ACTION_BASE_URL`
-- `AGENTIC_RAG_ACTION_MODEL`
-
-Backward compatibility is kept with `LIGHTRAG_*` envs.
-
-Env loading order:
-
-1. `agentic_rag_rl/.env`
-2. `<repo-root>/.env`
-
-Legacy `third_party_integration/lightrag_integration/.env` is no longer loaded by core config.
-Please migrate values to `agentic_rag_rl/.env`.
-
-### External API multihop test (build/query separated)
-
-Runner:
-
-```powershell
-python -m agentic_rag_rl.runners.external_api_multihop_test --phase build --graph-id demo --clear-working-dir
-python -m agentic_rag_rl.runners.external_api_multihop_test --phase query --graph-id demo --max-steps 4 --beam-width 4 --top-k 20
+```env
+AGENTIC_RAG_LLM_API_KEY=your_api_key
+AGENTIC_RAG_LLM_BASE_URL=https://your-openai-compatible-endpoint/v1
+AGENTIC_RAG_GRAPH_ADAPTER=freebase
+FREEBASE_ENTITY_API_URL=http://localhost:8000
+FREEBASE_SPARQL_API_URL=http://localhost:8890
 ```
+
+### 3) Run the minimal demo
 
 ```bash
-python -m agentic_rag_rl.runners.external_api_multihop_test --phase build --graph-id demo --clear-working-dir
-python -m agentic_rag_rl.runners.external_api_multihop_test --phase query --graph-id demo --max-steps 4 --beam-width 4 --top-k 20
+python -m agentic_rag_rl.runners.edge_env_demo
 ```
 
-Phases:
+If you see `[OK] Edge-select smoke passed.`, the main environment pipeline is working.
 
-- `all`: build graph and then query (legacy one-shot behavior)
-- `build`: only build graph cache
-- `query`: only run QA from existing graph cache
-
-Directory layout (default root: `agentic_rag_rl/temp/external_api_multihop`):
-
-- Graph cache: `graphs/<graph-id>/`
-- Logs: `logs/<graph-id>/step_logs.json`
-- Metadata: `graphs/<graph-id>/graph_meta.json`
-
-Typical lightweight workflow:
-
-1. Build once with a chosen `graph-id`
-2. Iterate query tests many times with the same `graph-id`
-
-### WebQSP Freebase smoke test
-
-Runner:
+## Freebase Smoke Test (Recommended for Demo)
 
 ```bash
-conda activate agentic-rl
 python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQTest-1092,WebQTest-1198 --max-steps 5 --policy llm
 ```
 
-Common options:
+On success, the summary should show `route_healthy: true`, and a report will be generated at:
 
-- `--policy llm|heuristic`: decide via LLM or first-edge heuristic
-- `--search-timeout` / `--sparql-timeout`: Freebase HTTP timeouts (default 60s / 120s)
-- `--print-trace`: print step-level `agent_prompt` and `agent_raw_response`
-- `--disable-unknown-probe`: disable unknown MID name probing
+`agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
 
-Report output:
+## Use Cases
 
-- `agentic_rag_rl/temp/freebase_webqsp_smoke/report.json`
-- Summary contains: `route_healthy`, `answer_hit_rate`, `cases_with_invalid_action`, `cases_with_mid_exposure`
+- Multi-hop knowledge graph QA (e.g., WebQSP)
+- Interpretability analysis of agent reasoning paths
+- Comparative experiments across policies (LLM/heuristic) and graph routes
 
-## Third-party LightRAG Integration
+## Notes
 
-This project integrates LightRAG as a third-party component without modifying upstream source code by default.
-
-- Integration root: `third_party_integration/lightrag_integration/`
-- Integration guide: `third_party_integration/lightrag_integration/docs/README.md`
-- Agent rules: `AGENTS.md`
-
-### Quick mock smoke test (offline)
-
-From `<repo-root>`:
-
-```powershell
-conda activate agentic-rl
-python -m third_party_integration.lightrag_integration.scripts.smoke_test_lightrag_mock
-```
-
-```bash
-conda activate agentic-rl
-python -m third_party_integration.lightrag_integration.scripts.smoke_test_lightrag_mock
-```
-
-Success marker:
-
-- `[OK] LightRAG mock smoke test passed.`
-
-### Functional test (LLM + embedding + optional rerank)
-
-Required env vars:
-
-- `LIGHTRAG_LLM_API_KEY`
-- `LIGHTRAG_EMBED_API_KEY`
-
-If you use a third-party OpenAI-compatible API, you can use:
-
-- `LIGHTRAG_BASE_URL`
-- `LIGHTRAG_API_KEY`
-
-Env template:
-
-- `third_party_integration/lightrag_integration/.env.example`
-
-Command:
-
-```powershell
-conda activate agentic-rl
-python -m third_party_integration.lightrag_integration.scripts.functional_test_lightrag
-```
-
-Success marker:
-
-- `[OK] LightRAG functional test passed.`
-
-## Project Tree (key parts)
-
-```text
-<repo-root>/
-├─ AGENTS.md
-├─ README.md
-├─ environment.yml
-├─ agentic_rag_rl/                 # core environment layer (project-owned)
-├─ LightRAG/                      # upstream third-party source
-└─ third_party_integration/
-	└─ lightrag_integration/
-		├─ docs/
-		│  └─ README.md                     # integration runbook
-		├─ wrappers/
-		│  ├─ lightrag_adapter.py           # real adapter (default)
-		│  └─ lightrag_adapter_mock.py      # mock adapter
-		├─ scripts/
-		│  ├─ functional_test_lightrag.py   # real functional test
-		│  └─ *_mock.py                     # offline mock tests
-		└─ temp/                            # local runtime artifacts (gitignored)
-```
-
+- `LightRAG/` is treated as upstream third-party code. Project-owned environment and integration logic is implemented in `agentic_rag_rl/` and `third_party_integration/`.
+- The executable main pipeline is now based on `edge_select`; the legacy `relation_select` path is retired.
