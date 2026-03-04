@@ -294,7 +294,7 @@ class FreebaseGraphProvider(GraphProvider):
     @staticmethod
     def _is_placeholder_name(name: str) -> bool:
         normalized = (name or "").strip().lower()
-        return normalized == "未知实体" or normalized.startswith("未知实体#")
+        return normalized == "unknown entity" or normalized.startswith("unknown entity#")
 
     @staticmethod
     def _looks_like_relation_name(token: str) -> bool:

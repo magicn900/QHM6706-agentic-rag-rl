@@ -32,7 +32,7 @@
 
 ### 4) unknown MID 解析阻塞
 
-- 若路径命中 `未知实体#N`，且 name probe 未解析成功，后续可回答性显著下降。
+- 若路径命中 `Unknown Entity#N`，且 name probe 未解析成功，后续可回答性显著下降。
 - 多个失败题出现 `unknown_mid_count > 0` 且 `resolved_name_count = 0`。
 
 ## 本轮改进计划（P0）

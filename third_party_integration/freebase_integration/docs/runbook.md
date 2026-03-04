@@ -77,8 +77,8 @@ python -m agentic_rag_rl.runners.webqsp_freebase_smoke_test --question-ids WebQT
 2. `SPARQLClient.query()`：请求失败重试后返回空 `bindings`。
 3. `FreebaseAdapter.search_entities()/expand_edges()`：内部异常捕获后返回空结果。
 4. `EdgeSelectionEnv`：若候选边为空，可通过 `answer` 动作或达到步数上限终止。
-5. 未命名实体不会向 Agent 暴露 MID；使用 `未知实体#N` 占位，并保留 `internal_*_ref` 供后续扩展。
-6. 需要排查“未知实体是否真实无名”时，可通过 Provider 的 `resolve_mid_names()` 做批量探测。
+5. 未命名实体不会向 Agent 暴露 MID；使用 `Unknown Entity#N` 占位，并保留 `internal_*_ref` 供后续扩展。
+6. 需要排查“Unknown Entity是否真实无名”时，可通过 Provider 的 `resolve_mid_names()` 做批量探测。
 
 ## 6. 常见问题
 

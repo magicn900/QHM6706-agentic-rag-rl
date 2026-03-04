@@ -157,6 +157,9 @@ class FreebaseAdapter(GraphAdapterProtocol):
             
             # 过滤噪音关系
             filtered_edges = self._noise_filter.filter_edges(raw_edges)
+
+            # 扩展后补齐缺失实体名，尽量减少 Unknown Entity 占位显示
+            await self._prefetch_missing_mid_names(filtered_edges, direction)
             
             # 转换为 CandidateEdge
             candidate_edges = self._convert_to_candidate_edges(
@@ -175,6 +178,77 @@ class FreebaseAdapter(GraphAdapterProtocol):
         except Exception as e:
             logger.error(f"Edge expansion failed for '{entity_ref}': {e}")
             return []
+
+    async def _prefetch_missing_mid_names(
+        self,
+        raw_edges: list[dict[str, Any]],
+        direction: str,
+    ) -> None:
+        """批量补齐边上实体 MID 的可读名称。
+
+        目的：
+        1. 在 `_convert_to_candidate_edges` 前预热 MidMapper；
+        2. 对可解析名称但未在原查询返回的 MID 进行二次解析；
+        3. 降低运行时 `Unknown Entity#N` 占位名数量。
+        """
+        mids_to_resolve: list[str] = []
+        seen_mids: set[str] = set()
+
+        def collect(mid: str | None, raw_name: str) -> None:
+            stable_mid = (mid or "").strip()
+            if not stable_mid or stable_mid in seen_mids:
+                return
+
+            normalized_name = (raw_name or "").strip()
+            cached_name = str(self._mid_mapper.get_name(stable_mid) or "").strip()
+            has_readable_name = bool(
+                (normalized_name and not self._is_mid_like(normalized_name))
+                or (cached_name and not self._is_mid_like(cached_name))
+            )
+            if has_readable_name:
+                return
+
+            seen_mids.add(stable_mid)
+            mids_to_resolve.append(stable_mid)
+
+        for edge in raw_edges:
+            if direction == "forward":
+                target_mid = self._extract_mid(str(edge.get("target", "") or ""))
+                target_name = str(edge.get("target_name", "") or "")
+                collect(target_mid, target_name)
+            elif direction == "backward":
+                source_mid = self._extract_mid(str(edge.get("source", "") or ""))
+                source_name = str(edge.get("source_name", "") or "")
+                collect(source_mid, source_name)
+            else:
+                target_mid = self._extract_mid(str(edge.get("target", "") or ""))
+                target_name = str(edge.get("target_name", "") or "")
+                source_mid = self._extract_mid(str(edge.get("source", "") or ""))
+                source_name = str(edge.get("source_name", "") or "")
+                collect(target_mid, target_name)
+                collect(source_mid, source_name)
+
+        if not mids_to_resolve:
+            return
+
+        try:
+            resolved_name_map = await self.resolve_mid_names(mids_to_resolve)
+        except Exception as e:
+            logger.debug(f"Prefetch MID names failed: {e}")
+            return
+
+        for mid, raw_name in resolved_name_map.items():
+            normalized_name = self._sanitize_resolved_name(raw_name)
+            if normalized_name and not self._is_mid_like(normalized_name):
+                self._mid_mapper.add_mapping(mid, normalized_name)
+
+    @staticmethod
+    def _sanitize_resolved_name(raw_name: str) -> str:
+        """清洗批量解析出的名称文本。"""
+        normalized = (raw_name or "").strip()
+        if normalized.startswith("[") and normalized.endswith("]") and len(normalized) >= 3:
+            normalized = normalized[1:-1].strip()
+        return normalized
 
     async def answer_question(
         self,
@@ -369,7 +443,7 @@ class FreebaseAdapter(GraphAdapterProtocol):
 
         规则：
         1. 有可读名称且非MID形态 -> 直接使用；
-        2. 否则若有MID -> 分配稳定匿名占位名（未知实体#N）；
+        2. 否则若有MID -> 分配稳定匿名占位名（Unknown Entity#N）；
         3. 否则 -> 返回通用匿名名称。
         """
         normalized = (raw_name or "").strip()
@@ -379,20 +453,20 @@ class FreebaseAdapter(GraphAdapterProtocol):
         if mid:
             return self._get_or_create_placeholder(mid)
 
-        return "未知实体"
+        return "Unknown Entity"
 
     def _get_or_create_placeholder(self, mid: str) -> str:
         """为未命名MID生成稳定匿名占位名。"""
         stable_mid = (mid or "").strip()
         if not stable_mid:
-            return "未知实体"
+            return "Unknown Entity"
 
         cached = self._mid_to_placeholder.get(stable_mid)
         if cached:
             return cached
 
         self._placeholder_counter += 1
-        placeholder = f"未知实体#{self._placeholder_counter}"
+        placeholder = f"Unknown Entity#{self._placeholder_counter}"
         self._mid_to_placeholder[stable_mid] = placeholder
         return placeholder
 

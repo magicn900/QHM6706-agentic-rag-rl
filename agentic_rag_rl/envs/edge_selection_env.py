@@ -682,7 +682,7 @@ class EdgeSelectionEnv:
         # 添加 frontier 实体
         for entity in frontier:
             # 匿名占位实体不可直接用于实体搜索，避免无效请求
-            if entity.startswith("未知实体#"):
+            if entity.startswith("Unknown Entity#"):
                 continue
             if entity and entity not in unique:
                 unique.append(entity)

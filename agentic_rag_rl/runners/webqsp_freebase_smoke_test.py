@@ -146,7 +146,7 @@ def _has_noisy_relation(edge_text: str) -> bool:
 def _is_unknown_name(name: str) -> bool:
     """判断是否为匿名占位实体名。"""
     normalized = (name or "").strip()
-    return normalized == "未知实体" or normalized.startswith("未知实体#")
+    return normalized == "Unknown Entity" or normalized.startswith("Unknown Entity#")
 
 
 def _normalize_text(text: str) -> str:
@@ -217,11 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--search-timeout", type=float, default=60.0, help="/search 请求超时（秒）")
     parser.add_argument("--sparql-timeout", type=float, default=120.0, help="/sparql 请求超时（秒）")
-    parser.add_argument("--probe-max-mids", type=int, default=80, help="未知实体名称探测时每次最多探测的 MID 数")
+    parser.add_argument("--probe-max-mids", type=int, default=80, help="Unknown Entity名称探测时每次最多探测的 MID 数")
     parser.add_argument(
         "--disable-unknown-probe",
         action="store_true",
-        help="关闭未知实体名称探测（默认开启）",
+        help="关闭Unknown Entity名称探测（默认开启）",
     )
     parser.add_argument(
         "--report-file",
