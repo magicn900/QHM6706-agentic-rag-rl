@@ -120,6 +120,96 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def split_answer_candidates(answer_text: str) -> list[str]:
+    """将答案文本拆分为候选答案列表。"""
+    normalized = (answer_text or "").strip()
+    if not normalized:
+        return []
+
+    normalized = normalized.replace("；", ";")
+    parts = [part.strip() for part in re.split(r"[;\n]+", normalized) if part.strip()]
+    return parts if parts else []
+
+
+def normalize_answer_item(text: str) -> str:
+    """归一化单个答案项，兼容常见标点和大小写差异。"""
+    normalized = normalize_text(text)
+    normalized = re.sub(r"^[\s'\"“”‘’()\[\]{}:]+", "", normalized)
+    normalized = re.sub(r"[\s'\"“”‘’()\[\]{}:]+$", "", normalized)
+    return normalized
+
+
+def build_normalized_answer_list(items: list[str]) -> list[str]:
+    """去重并返回归一化答案列表。"""
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = normalize_answer_item(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def is_relaxed_answer_match(pred_item: str, gold_item: str) -> bool:
+    """宽松匹配：支持双向包含。"""
+    return bool(pred_item and gold_item and (pred_item in gold_item or gold_item in pred_item))
+
+
+def compute_set_metrics(final_answer: str, expected_answers: list[str]) -> dict[str, Any]:
+    """计算集合级答案指标（与 smoke runner 对齐）。"""
+    predicted_answers = build_normalized_answer_list(split_answer_candidates(final_answer))
+    gold_answers = build_normalized_answer_list([ans for ans in expected_answers if (ans or "").strip()])
+
+    result: dict[str, Any] = {
+        "evaluable": True,
+        "reason": "",
+        "predicted_answers_normalized": predicted_answers,
+        "gold_answers_normalized": gold_answers,
+        "matched_gold_answers_normalized": [],
+        "matched_predicted_answers_normalized": [],
+        "precision": None,
+        "recall": None,
+        "f1": None,
+        "exact_set_match": False,
+    }
+
+    if not final_answer.strip():
+        result["evaluable"] = False
+        result["reason"] = "empty_final_answer"
+        return result
+
+    if not gold_answers:
+        result["evaluable"] = False
+        result["reason"] = "missing_expected_answers"
+        return result
+
+    matched_gold: set[str] = set()
+    matched_pred: set[str] = set()
+    for pred in predicted_answers:
+        for gold in gold_answers:
+            if is_relaxed_answer_match(pred, gold):
+                matched_gold.add(gold)
+                matched_pred.add(pred)
+
+    precision = (len(matched_pred) / len(predicted_answers)) if predicted_answers else 0.0
+    recall = (len(matched_gold) / len(gold_answers)) if gold_answers else 0.0
+    f1 = 0.0
+    if precision + recall > 0:
+        f1 = 2 * precision * recall / (precision + recall)
+
+    result["matched_gold_answers_normalized"] = sorted(matched_gold)
+    result["matched_predicted_answers_normalized"] = sorted(matched_pred)
+    result["precision"] = round(precision, 6)
+    result["recall"] = round(recall, 6)
+    result["f1"] = round(f1, 6)
+    result["exact_set_match"] = (
+        len(matched_gold) == len(gold_answers) and len(matched_pred) == len(predicted_answers)
+    )
+    return result
+
+
 def evaluate_answer_hit(final_answer: str, expected_answers: list[str]) -> tuple[bool | None, str]:
     """评估最终答案是否命中参考答案。
 
@@ -128,24 +218,23 @@ def evaluate_answer_hit(final_answer: str, expected_answers: list[str]) -> tuple
     - (False, 首条参考答案)
     - (None, 不可评估原因)
     """
-    normalized_answer = normalize_text(final_answer)
-    if not normalized_answer:
+    metrics = compute_set_metrics(final_answer, expected_answers)
+    if not metrics.get("evaluable"):
+        reason = str(metrics.get("reason") or "not_evaluable")
+        if reason == "empty_final_answer":
+            return None, "empty_final_answer"
+        if reason == "missing_expected_answers":
+            return None, "missing_expected_answers"
+        return None, reason
+
+    matched_gold = list(metrics.get("matched_gold_answers_normalized") or [])
+    if matched_gold:
+        return True, matched_gold[0]
+
+    gold_answers = list(metrics.get("gold_answers_normalized") or [])
+    if not gold_answers:
         return None, "empty_final_answer"
-
-    cleaned_expected = [ans for ans in expected_answers if (ans or "").strip()]
-    if not cleaned_expected:
-        return None, "missing_expected_answers"
-
-    for expected in cleaned_expected:
-        normalized_expected = normalize_text(expected)
-        if not normalized_expected:
-            continue
-
-        # 双向包含，兼容“答案+附加说明”与“简称/全称”
-        if normalized_expected in normalized_answer or normalized_answer in normalized_expected:
-            return True, expected
-
-    return False, cleaned_expected[0]
+    return False, gold_answers[0]
 
 
 def format_candidate_edges(state: EdgeEnvState) -> str:
@@ -320,6 +409,20 @@ def run_episode(
         "answer_evaluable": False,
         "answer_hit": None,
         "answer_hit_reason": "",
+        "predicted_answers_normalized": [],
+        "gold_answers_normalized": [],
+        "answer_set_metrics": {
+            "evaluable": False,
+            "reason": "not_computed",
+            "predicted_answers_normalized": [],
+            "gold_answers_normalized": [],
+            "matched_gold_answers_normalized": [],
+            "matched_predicted_answers_normalized": [],
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "exact_set_match": False,
+        },
         "steps": 0,
         "done": False,
         "graph_adapter": graph_adapter,
@@ -390,10 +493,14 @@ def run_episode(
                 break
 
         summary["final_answer"] = extract_final_answer(events)
+        set_metrics = compute_set_metrics(summary["final_answer"], expected_answers)
         answer_hit, hit_reason = evaluate_answer_hit(summary["final_answer"], expected_answers)
         summary["answer_evaluable"] = answer_hit is not None
         summary["answer_hit"] = answer_hit
         summary["answer_hit_reason"] = hit_reason
+        summary["predicted_answers_normalized"] = list(set_metrics.get("predicted_answers_normalized") or [])
+        summary["gold_answers_normalized"] = list(set_metrics.get("gold_answers_normalized") or [])
+        summary["answer_set_metrics"] = set_metrics
         summary["success"] = True
         progress_placeholder.progress(1.0)
         return summary
@@ -527,6 +634,24 @@ def main() -> None:
                     st.success(f"✅ Correctness: HIT. Matched reference answer: {answer_hit_reason}")
                 else:
                     st.error(f"❌ Correctness: MISS. Suggested reference answer: {answer_hit_reason}")
+
+                set_metrics = summary.get("answer_set_metrics") or {}
+                precision = set_metrics.get("precision")
+                recall = set_metrics.get("recall")
+                f1 = set_metrics.get("f1")
+                exact_set_match = bool(set_metrics.get("exact_set_match", False))
+
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Precision", f"{float(precision):.4f}" if precision is not None else "N/A")
+                s2.metric("Recall", f"{float(recall):.4f}" if recall is not None else "N/A")
+                s3.metric("F1", f"{float(f1):.4f}" if f1 is not None else "N/A")
+                s4.metric("Exact Set Match", str(exact_set_match))
+
+                with st.expander("Normalized Answer Comparison", expanded=False):
+                    st.write("Predicted:", summary.get("predicted_answers_normalized") or [])
+                    st.write("Gold:", summary.get("gold_answers_normalized") or [])
+                    st.write("Matched Gold:", set_metrics.get("matched_gold_answers_normalized") or [])
+                    st.write("Matched Predicted:", set_metrics.get("matched_predicted_answers_normalized") or [])
             else:
                 if answer_hit_reason == "missing_expected_answers":
                     st.info("ℹ️ Correctness: Not evaluable, because no reference answers are provided.")

@@ -154,30 +154,136 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _split_answer_candidates(answer_text: str) -> list[str]:
+    """将答案文本拆分为候选答案列表。
+
+    说明：
+    - 优先支持分号与换行分隔，避免逗号误切包含地名的实体；
+    - 若未命中分隔符，则将整句作为单答案处理。
+    """
+    normalized = (answer_text or "").strip()
+    if not normalized:
+        return []
+
+    normalized = normalized.replace("；", ";")
+    parts = [part.strip() for part in re.split(r"[;\n]+", normalized) if part.strip()]
+    if not parts:
+        return []
+    return parts
+
+
+def _normalize_answer_item(text: str) -> str:
+    """归一化单个答案项，尽量兼容大小写与标点差异。"""
+    normalized = _normalize_text(text)
+    normalized = re.sub(r"^[\s'\"“”‘’()\[\]{}:]+", "", normalized)
+    normalized = re.sub(r"[\s'\"“”‘’()\[\]{}:]+$", "", normalized)
+    return normalized
+
+
+def _build_normalized_answer_list(items: list[str]) -> list[str]:
+    """去重并返回归一化答案列表。"""
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = _normalize_answer_item(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _is_relaxed_answer_match(pred_item: str, gold_item: str) -> bool:
+    """宽松匹配：支持双向包含，兼容简称/全称与附加说明。"""
+    return bool(pred_item and gold_item and (pred_item in gold_item or gold_item in pred_item))
+
+
+def _compute_set_metrics(final_answer: str, expected_answers: list[str]) -> dict[str, Any]:
+    """计算集合级答案指标（precision/recall/f1/exact_match）。"""
+    predicted_answers = _build_normalized_answer_list(_split_answer_candidates(final_answer))
+    gold_answers = _build_normalized_answer_list([ans for ans in expected_answers if (ans or "").strip()])
+
+    if not final_answer.strip():
+        return {
+            "evaluable": False,
+            "reason": "empty_final_answer",
+            "predicted_answers_normalized": predicted_answers,
+            "gold_answers_normalized": gold_answers,
+            "matched_gold_answers_normalized": [],
+            "matched_predicted_answers_normalized": [],
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "exact_set_match": False,
+        }
+
+    if not gold_answers:
+        return {
+            "evaluable": False,
+            "reason": "missing_expected_answers",
+            "predicted_answers_normalized": predicted_answers,
+            "gold_answers_normalized": gold_answers,
+            "matched_gold_answers_normalized": [],
+            "matched_predicted_answers_normalized": [],
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "exact_set_match": False,
+        }
+
+    matched_gold: set[str] = set()
+    matched_pred: set[str] = set()
+    for pred in predicted_answers:
+        for gold in gold_answers:
+            if _is_relaxed_answer_match(pred, gold):
+                matched_gold.add(gold)
+                matched_pred.add(pred)
+
+    precision = (len(matched_pred) / len(predicted_answers)) if predicted_answers else 0.0
+    recall = (len(matched_gold) / len(gold_answers)) if gold_answers else 0.0
+    f1 = 0.0
+    if precision + recall > 0:
+        f1 = 2 * precision * recall / (precision + recall)
+
+    exact_set_match = len(matched_gold) == len(gold_answers) and len(matched_pred) == len(predicted_answers)
+
+    return {
+        "evaluable": True,
+        "reason": "ok",
+        "predicted_answers_normalized": predicted_answers,
+        "gold_answers_normalized": gold_answers,
+        "matched_gold_answers_normalized": sorted(matched_gold),
+        "matched_predicted_answers_normalized": sorted(matched_pred),
+        "precision": round(precision, 6),
+        "recall": round(recall, 6),
+        "f1": round(f1, 6),
+        "exact_set_match": exact_set_match,
+    }
+
+
 def _evaluate_answer_hit(final_answer: str, expected_answers: list[str]) -> tuple[bool | None, str]:
     """评估最终答案是否命中标注答案。
 
     Returns:
         (是否命中/是否可评估, 命中或未命中原因)
     """
-    normalized_answer = _normalize_text(final_answer)
-    if not normalized_answer:
+    metrics = _compute_set_metrics(final_answer, expected_answers)
+    if not metrics.get("evaluable"):
+        reason = str(metrics.get("reason") or "not_evaluable")
+        if reason == "empty_final_answer":
+            return None, "empty_final_answer"
+        if reason == "missing_expected_answers":
+            return None, "missing_expected_answers"
+        return None, reason
+
+    matched_gold = list(metrics.get("matched_gold_answers_normalized") or [])
+    if matched_gold:
+        return True, matched_gold[0]
+
+    gold_answers = list(metrics.get("gold_answers_normalized") or [])
+    if not gold_answers:
         return None, "empty_final_answer"
-
-    cleaned_expected = [ans for ans in expected_answers if (ans or "").strip()]
-    if not cleaned_expected:
-        return None, "missing_expected_answers"
-
-    for expected in cleaned_expected:
-        normalized_expected = _normalize_text(expected)
-        if not normalized_expected:
-            continue
-
-        # 采用双向包含，兼容“答案+附加说明”或“简称/全称”
-        if normalized_expected in normalized_answer or normalized_answer in normalized_expected:
-            return True, expected
-
-    return False, cleaned_expected[0]
+    return False, gold_answers[0]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -322,6 +428,16 @@ async def _run_one_case(
         "noisy_relation_hit": False,
         "zero_overlap_selected": False,
         "final_answer": "",
+        "predicted_answers_normalized": [],
+        "gold_answers_normalized": [],
+        "set_metrics": {
+            "evaluable": False,
+            "reason": "not_computed",
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "exact_set_match": False,
+        },
         "answer_hit": None,
         "answer_hit_ref": "",
         "unknown_mid_refs": [],
@@ -481,8 +597,12 @@ async def _run_one_case(
             if last_step.get("done") and str(last_step.get("termination_reason")) == "max_steps_reached":
                 final_answer = ""
 
+        set_metrics = _compute_set_metrics(final_answer, case.expected_answers)
         hit, hit_ref = _evaluate_answer_hit(final_answer, case.expected_answers)
         case_result["final_answer"] = final_answer
+        case_result["predicted_answers_normalized"] = list(set_metrics.get("predicted_answers_normalized") or [])
+        case_result["gold_answers_normalized"] = list(set_metrics.get("gold_answers_normalized") or [])
+        case_result["set_metrics"] = set_metrics
         case_result["answer_hit"] = hit
         case_result["answer_hit_ref"] = hit_ref
 
@@ -530,9 +650,35 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     unknown_mid_unresolved = max(unknown_mid_total - unknown_mid_resolved, 0)
 
-    answer_evaluable_cases = sum(1 for item in results if item.get("answer_hit") is not None)
+    answer_evaluable_cases = sum(1 for item in results if (item.get("set_metrics") or {}).get("evaluable") is True)
     answer_hit_cases = sum(1 for item in results if item.get("answer_hit") is True)
     answer_hit_rate = (answer_hit_cases / answer_evaluable_cases) if answer_evaluable_cases > 0 else 0.0
+
+    precision_values = [
+        float((item.get("set_metrics") or {}).get("precision"))
+        for item in results
+        if (item.get("set_metrics") or {}).get("precision") is not None
+    ]
+    recall_values = [
+        float((item.get("set_metrics") or {}).get("recall"))
+        for item in results
+        if (item.get("set_metrics") or {}).get("recall") is not None
+    ]
+    f1_values = [
+        float((item.get("set_metrics") or {}).get("f1"))
+        for item in results
+        if (item.get("set_metrics") or {}).get("f1") is not None
+    ]
+    exact_set_match_cases = sum(
+        1
+        for item in results
+        if (item.get("set_metrics") or {}).get("exact_set_match") is True
+    )
+
+    macro_precision = (sum(precision_values) / len(precision_values)) if precision_values else 0.0
+    macro_recall = (sum(recall_values) / len(recall_values)) if recall_values else 0.0
+    macro_f1 = (sum(f1_values) / len(f1_values)) if f1_values else 0.0
+    exact_set_match_rate = (exact_set_match_cases / answer_evaluable_cases) if answer_evaluable_cases > 0 else 0.0
 
     route_healthy = (
         error_count == 0
@@ -560,6 +706,11 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "answer_evaluable_cases": answer_evaluable_cases,
         "answer_hit_cases": answer_hit_cases,
         "answer_hit_rate": round(answer_hit_rate, 4),
+        "answer_exact_set_match_cases": exact_set_match_cases,
+        "answer_exact_set_match_rate": round(exact_set_match_rate, 4),
+        "answer_macro_precision": round(macro_precision, 4),
+        "answer_macro_recall": round(macro_recall, 4),
+        "answer_macro_f1": round(macro_f1, 4),
         "error_cases": error_count,
         "route_healthy": route_healthy,
     }
@@ -658,8 +809,6 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     ],
                     "unresolved_samples": unresolved_refs[:8],
                 }
-
-            results.append(case_result)
 
             status = "OK" if not case_result.get("error") else "ERROR"
             print(

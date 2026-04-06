@@ -12,7 +12,9 @@ ACTION_FORMAT_PROMPT = (
     "<edge_select>1; 2; ...</edge_select> or <answer>your answer</answer>.\n"
     "Each edge in <candidate_edges> has a numeric index (starting from 1).\n"
     "If information is insufficient, <edge_select> must contain only numeric indices (e.g., 1;3), not full edge text.\n"
-    "If information is already sufficient, output <answer> directly."
+    "If information is already sufficient, output <answer> directly.\n"
+    "When multiple entities satisfy the question, list as many confirmed answers as possible in ONE <answer> tag, "
+    "and separate items with semicolons (;)."
 )
 EDGE_CONSTRAINT_PROMPT = "You can only select one or more edge indices from <candidate_edges>. Separate multiple indices with semicolons (;)."
 DECISION_HINT_PROMPT_TEMPLATE = (
@@ -54,6 +56,25 @@ ONE_SHOT_ANSWER_EXAMPLE = (
     "Edge 2 is about language and Edge 3 is about population, both irrelevant to the question. "
     "Decision: evidence is sufficient, answer directly.</reasoning>\n"
     "<answer>Kenyan shilling</answer>"
+)
+ONE_SHOT_MULTI_ANSWER_EXAMPLE = (
+    "[One-shot Example 3: Multi-answer]\n"
+    "Question: what school did michael jordan attend?\n"
+    "<knowledge>\n"
+    "There is 1 active path:\n"
+    "- Path 1: Michael Jordan -people.person.education-> North Carolina Tar Heels men's basketball"
+    " -education.education.institution-> University of North Carolina at Chapel Hill"
+    " (tail: University of North Carolina at Chapel Hill)\n"
+    "</knowledge>\n"
+    "<candidate_edges>\n"
+    "1. Michael Jordan -people.person.education-> Emsley A. Laney High School\n"
+    "2. Michael Jordan -people.person.education-> University of North Carolina at Chapel Hill\n"
+    "3. Michael Jordan -people.person.education-> North Carolina Tar Heels men's basketball\n"
+    "</candidate_edges>\n"
+    "Example output:\n"
+    "<reasoning>These edges provide multiple valid education entities. "
+    "Decision: evidence is sufficient, answer with all confirmed items using semicolons.</reasoning>\n"
+    "<answer>Emsley A. Laney High School; University of North Carolina at Chapel Hill; North Carolina Tar Heels men's basketball</answer>"
 )
 
 # ========== Knowledge Block Templates ==========
@@ -100,6 +121,7 @@ def build_action_prompt(
         f"{EDGE_CONSTRAINT_PROMPT}\n\n"
         f"{ONE_SHOT_EDGE_SELECT_EXAMPLE}\n\n"
         f"{ONE_SHOT_ANSWER_EXAMPLE}\n\n"
+        f"{ONE_SHOT_MULTI_ANSWER_EXAMPLE}\n\n"
         f"Question: {question}\n\n"
         f"{knowledge}\n\n"
         f"{format_candidate_edges(candidate_edges)}\n\n"
