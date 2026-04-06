@@ -196,6 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="指定题号列表，逗号分隔（优先级高于 sample-size）",
     )
     parser.add_argument("--beam-width", type=int, default=3, help="环境 beam_width")
+    parser.add_argument("--concurrency", type=int, default=1, help="并发题目数（建议 1-8）")
     parser.add_argument("--max-steps", type=int, default=3, help="每题最多推理步数")
     parser.add_argument("--top-k", type=int, default=8, help="每轮实体召回数量")
     parser.add_argument("--selection-k", type=int, default=3, help="每步边选择数量目标（0 表示不强制）")
@@ -566,6 +567,10 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 async def run_smoke(args: argparse.Namespace) -> int:
     """执行 WebQSP 多题 Freebase 烟测主流程。"""
+    if args.concurrency <= 0:
+        print("[ERROR] --concurrency 必须大于 0。")
+        return 2
+
     dataset_path = Path(args.dataset)
     if not dataset_path.exists():
         print(f"[ERROR] 数据集不存在: {dataset_path}")
@@ -598,21 +603,10 @@ async def run_smoke(args: argparse.Namespace) -> int:
         search_timeout=args.search_timeout,
         sparql_timeout=args.sparql_timeout,
     )
-    env = EdgeSelectionEnv(
-        provider=provider,
-        beam_width=args.beam_width,
-        max_steps=args.max_steps,
-        top_k=args.top_k,
-        answer_mode="hybrid",
-        selection_k=args.selection_k,
-        enable_rerank=args.enable_rerank,
-        rerank_trigger_n=args.rerank_trigger_n,
-        rerank_top_k=args.rerank_top_k,
-    )
-
     print("[INFO] WebQSP Freebase 烟测开始")
     print(f"[INFO] 数据集: {dataset_path}")
     print(f"[INFO] 测试题数: {len(selected)}")
+    print(f"[INFO] 并发题数: {args.concurrency}")
     print(f"[INFO] 决策策略: {args.policy}")
     print(f"[INFO] 起点模式: {args.start_mode}")
     print(f"[INFO] Freebase /search 超时: {args.search_timeout}s, /sparql 超时: {args.sparql_timeout}s")
@@ -620,12 +614,24 @@ async def run_smoke(args: argparse.Namespace) -> int:
     results: list[dict[str, Any]] = []
     await provider.initialize()
     try:
-        for index, case in enumerate(selected, start=1):
+        async def _run_case(index: int, case: WebQSPCase) -> tuple[int, dict[str, Any]]:
             print("-" * 72)
             print(f"[CASE {index}/{len(selected)}] {case.question_id}")
             print(f"Q: {case.question}")
             if case.topic_entity:
                 print(f"Topic: {case.topic_entity}")
+
+            env = EdgeSelectionEnv(
+                provider=provider,
+                beam_width=args.beam_width,
+                max_steps=args.max_steps,
+                top_k=args.top_k,
+                answer_mode="hybrid",
+                selection_k=args.selection_k,
+                enable_rerank=args.enable_rerank,
+                rerank_trigger_n=args.rerank_trigger_n,
+                rerank_top_k=args.rerank_top_k,
+            )
 
             case_result = await _run_one_case(
                 env,
@@ -677,6 +683,29 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 )
             if case_result.get("error"):
                 print(f"[ERROR] {case_result['error']}")
+            return index, case_result
+
+        if args.concurrency == 1:
+            for index, case in enumerate(selected, start=1):
+                _, case_result = await _run_case(index, case)
+                results.append(case_result)
+        else:
+            semaphore = asyncio.Semaphore(args.concurrency)
+
+            async def _run_case_with_limit(index: int, case: WebQSPCase) -> tuple[int, dict[str, Any]]:
+                async with semaphore:
+                    return await _run_case(index, case)
+
+            tasks = [
+                asyncio.create_task(_run_case_with_limit(index, case))
+                for index, case in enumerate(selected, start=1)
+            ]
+            indexed_results: dict[int, dict[str, Any]] = {}
+            for task in asyncio.as_completed(tasks):
+                idx, case_result = await task
+                indexed_results[idx] = case_result
+
+            results = [indexed_results[idx] for idx in range(1, len(selected) + 1)]
     finally:
         await provider.finalize()
 
@@ -689,6 +718,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             "sample_size": len(selected),
             "seed": args.seed,
             "question_ids": args.question_ids,
+            "concurrency": args.concurrency,
             "beam_width": args.beam_width,
             "max_steps": args.max_steps,
             "top_k": args.top_k,

@@ -20,8 +20,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name).to(device)
 
 # 优先加载 IVF 索引（更快），如果不存在则加载原始索引
-ivf_index_path = "name_ids_ivf.faiss"
-flat_index_path = "name_ids.faiss"
+ivf_index_path = "/data/liufeifan/project/QHM6706-agentic-rag-rl/third_party_integration/freebase_integration/utils/name_ids_ivf.faiss"
+flat_index_path = "/data/maochongchong/project/DoM/DoM-main/utils/name_ids.faiss"
 
 if os.path.exists(ivf_index_path):
     print(f"加载 IVF 索引: {ivf_index_path}")
@@ -39,7 +39,7 @@ else:
 print(f"索引向量数量: {index.ntotal:,}")
 
 # 加载 name_to_ids 映射
-with open("name_to_ids.pkl", "rb") as f:
+with open("/data/maochongchong/project/DoM/DoM-main/utils/name_to_ids.pkl", "rb") as f:
     name_to_ids = pickle.load(f)
 
 # 将 name_to_ids 转换为列表
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",  # 允许所有IP访问
-        port=8003,       # 端口号
+        port=8000,       # 端口号
         workers=1,       # 工作进程数，根据你的服务器配置调整
         log_level="info" # 日志级别
     )

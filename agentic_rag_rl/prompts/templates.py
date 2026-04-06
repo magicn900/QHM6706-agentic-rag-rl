@@ -6,9 +6,9 @@ from agentic_rag_rl.contracts import CandidateEdge
 SYSTEM_PROMPT = "You are an intelligent assistant that performs multi-path reasoning over a knowledge graph."
 ACTION_FORMAT_PROMPT = (
     "You must strictly follow this output procedure:\n"
-    "1) Inside <think>, analyze each candidate edge and judge whether it provides useful evidence for the question.\n"
-    "2) At the end of <think>, clearly summarize the decision: either select edge indices to continue expansion or answer directly if evidence is sufficient.\n"
-    "3) After </think>, output exactly one action tag and nothing else: "
+    "1) Inside <reasoning>, analyze each candidate edge and judge whether it provides useful evidence for the question.\n"
+    "2) At the end of <reasoning>, clearly summarize the decision: either select edge indices to continue expansion or answer directly if evidence is sufficient.\n"
+    "3) After <reasoning>, output exactly one action tag and nothing else: "
     "<edge_select>1; 2; ...</edge_select> or <answer>your answer</answer>.\n"
     "Each edge in <candidate_edges> has a numeric index (starting from 1).\n"
     "If information is insufficient, <edge_select> must contain only numeric indices (e.g., 1;3), not full edge text.\n"
@@ -31,9 +31,9 @@ ONE_SHOT_EDGE_SELECT_EXAMPLE = (
     "3. Queen Elizabeth The Queen Mother -people.person.gender-> Female\n"
     "</candidate_edges>\n"
     "Example output:\n"
-    "<think>Edge-by-edge analysis: Edge 1 directly provides the parent-child relation and is highly relevant; "
+    "<reasoning>Edge 1 directly provides the parent-child relation and is highly relevant; "
     "Edge 2 is music-related and irrelevant; Edge 3 only gives gender information and is insufficient to answer who the mother is. "
-    "Decision: select index 1 for expansion.</think>\n"
+    "Decision: select index 1 for expansion.</reasoning>\n"
     "<edge_select>1</edge_select>"
 )
 ONE_SHOT_ANSWER_EXAMPLE = (
@@ -50,9 +50,9 @@ ONE_SHOT_ANSWER_EXAMPLE = (
     "3. Kenya -location.country.population-> 53771300\n"
     "</candidate_edges>\n"
     "Example output:\n"
-    "<think>Edge-by-edge analysis: Edge 1 directly gives the currency and is sufficient to answer; "
+    "<reasoning>Edge 1 directly gives the currency and is sufficient to answer; "
     "Edge 2 is about language and Edge 3 is about population, both irrelevant to the question. "
-    "Decision: evidence is sufficient, answer directly.</think>\n"
+    "Decision: evidence is sufficient, answer directly.</reasoning>\n"
     "<answer>Kenyan shilling</answer>"
 )
 
@@ -64,16 +64,16 @@ CANDIDATE_EDGES_TEMPLATE = "<candidate_edges>\n{edges}\n</candidate_edges>"
 # ========== Regex Patterns ==========
 EDGE_SELECT_REGEX = r"<edge_select>(.*?)</edge_select>"
 ANSWER_REGEX = r"<answer>(.*?)</answer>"
-THINK_REGEX = r"<think>(.*?)</think>"
+THINK_REGEX = r"<reasoning>(.*?)</reasoning>"
 
 # ========== Fallback & Manual Input Templates ==========
 MANUAL_INPUT_PROMPT = "Input edge indices or answer: your answer:"
-THINK_MANUAL_ANSWER = "<think>manual answer</think>"
-THINK_MANUAL_SELECT_TEMPLATE = "<think>manual select edge: {edge}</think>"
-THINK_HEURISTIC_SELECT_TEMPLATE = "<think>heuristic select first edge: {edge}</think>"
-THINK_HEURISTIC_FALLBACK_ANSWER = "<think>heuristic fallback to provider answer</think>"
-THINK_PARSE_FALLBACK_TEMPLATE = "<think>Failed to parse standard tags. Fallback to candidate edge indices: {edge}</think>"
-THINK_EMPTY_EDGE_FALLBACK = "<think>Candidate edges are empty. Fallback to answer.</think>"
+THINK_MANUAL_ANSWER = "::<manual answer>::"
+THINK_MANUAL_SELECT_TEMPLATE = "::<manual select edge: {edge}>::"
+THINK_HEURISTIC_SELECT_TEMPLATE = "::<heuristic select first edge: {edge}>::"
+THINK_HEURISTIC_FALLBACK_ANSWER = "::<heuristic fallback to provider answer>::"
+THINK_PARSE_FALLBACK_TEMPLATE = "::<Failed to parse standard tags. Fallback to candidate edge indices: {edge}>::"
+THINK_EMPTY_EDGE_FALLBACK = "::<Candidate edges are empty. Fallback to answer.>::"
 
 
 def format_candidate_edges(candidate_edges: list[CandidateEdge]) -> str:

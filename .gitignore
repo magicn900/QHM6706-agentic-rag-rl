@@ -204,3 +204,6 @@ data/
 
 # report output
 reports/
+
+# model weights
+third_party_integration/freebase_integration/utils/name_ids_ivf.faiss
