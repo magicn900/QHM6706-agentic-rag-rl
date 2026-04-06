@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -104,6 +105,47 @@ def apply_showcase_selection(showcase_cases: list[dict[str, Any]]) -> None:
 
     st.session_state["question"] = str(hit_case.get("question", "")).strip()
     st.session_state["topic_entity"] = str(hit_case.get("topic_entity", "")).strip()
+
+
+def find_selected_showcase_case(showcase_cases: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """根据当前选择返回对应的 showcase 样例。"""
+    selected = str(st.session_state.get("selected_showcase", "Custom") or "Custom")
+    if selected == "Custom":
+        return None
+    return next((c for c in showcase_cases if build_showcase_label(c) == selected), None)
+
+
+def normalize_text(text: str) -> str:
+    """归一化文本，供宽松答案命中比较使用。"""
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def evaluate_answer_hit(final_answer: str, expected_answers: list[str]) -> tuple[bool | None, str]:
+    """评估最终答案是否命中参考答案。
+
+    返回值：
+    - (True, 命中的参考答案)
+    - (False, 首条参考答案)
+    - (None, 不可评估原因)
+    """
+    normalized_answer = normalize_text(final_answer)
+    if not normalized_answer:
+        return None, "empty_final_answer"
+
+    cleaned_expected = [ans for ans in expected_answers if (ans or "").strip()]
+    if not cleaned_expected:
+        return None, "missing_expected_answers"
+
+    for expected in cleaned_expected:
+        normalized_expected = normalize_text(expected)
+        if not normalized_expected:
+            continue
+
+        # 双向包含，兼容“答案+附加说明”与“简称/全称”
+        if normalized_expected in normalized_answer or normalized_answer in normalized_expected:
+            return True, expected
+
+    return False, cleaned_expected[0]
 
 
 def format_candidate_edges(state: EdgeEnvState) -> str:
@@ -216,6 +258,8 @@ def decide_heuristic_action(state: EdgeEnvState) -> tuple[EdgeEnvAction, dict[st
 def run_episode(
     *,
     question: str,
+    question_id: str,
+    expected_answers: list[str],
     topic_entity: str,
     max_steps: int,
     beam_width: int,
@@ -233,11 +277,11 @@ def run_episode(
     trace_placeholder: st.delta_generator.DeltaGenerator,
     progress_placeholder: st.delta_generator.DeltaGenerator,
 ) -> dict[str, Any]:
-    """Run one episode and stream events in real time.
+    """运行一轮 episode 并实时渲染事件。
 
-    Input: Page parameters, event cache, and render placeholders.
-    Output: Final run summary.
-    Boundary: Returns an error field on exceptions instead of crashing the page.
+    输入：页面参数、参考答案、事件缓存与渲染占位符。
+    输出：包含执行状态与答案命中信息的 summary。
+    边界：异常时返回 error 字段，不抛出到页面层。
     """
     os.environ["AGENTIC_RAG_GRAPH_ADAPTER"] = graph_adapter
     os.environ["FREEBASE_ENTITY_API_URL"] = freebase_entity_api_url
@@ -270,7 +314,12 @@ def run_episode(
     summary: dict[str, Any] = {
         "success": False,
         "error": "",
+        "question_id": question_id,
         "final_answer": "",
+        "expected_answers": expected_answers,
+        "answer_evaluable": False,
+        "answer_hit": None,
+        "answer_hit_reason": "",
         "steps": 0,
         "done": False,
         "graph_adapter": graph_adapter,
@@ -341,6 +390,10 @@ def run_episode(
                 break
 
         summary["final_answer"] = extract_final_answer(events)
+        answer_hit, hit_reason = evaluate_answer_hit(summary["final_answer"], expected_answers)
+        summary["answer_evaluable"] = answer_hit is not None
+        summary["answer_hit"] = answer_hit
+        summary["answer_hit_reason"] = hit_reason
         summary["success"] = True
         progress_placeholder.progress(1.0)
         return summary
@@ -353,7 +406,7 @@ def run_episode(
 
 
 def main() -> None:
-    """Main entrypoint for the frontend page."""
+    """前端页面主入口。"""
     st.set_page_config(page_title="Agentic RAG RL Demo", layout="wide")
     st.title("Agentic RAG RL Frontend Demo")
     st.caption("Input a question, quick-fill with showcase examples, and observe step-by-step agent traces.")
@@ -398,6 +451,20 @@ def main() -> None:
         st.slider("Top-K", min_value=1, max_value=20, step=1, key="top_k")
         st.slider("Selection-K", min_value=0, max_value=6, step=1, key="selection_k")
 
+    selected_case = find_selected_showcase_case(showcase_cases)
+    selected_question_id = ""
+    expected_answers: list[str] = []
+    if selected_case:
+        selected_question_id = str(selected_case.get("question_id", "")).strip()
+        raw_expected = selected_case.get("expected_answers_sample")
+        if isinstance(raw_expected, list):
+            expected_answers = [str(ans).strip() for ans in raw_expected if str(ans).strip()]
+
+    if expected_answers:
+        st.caption(f"Auto-eval enabled for showcase `{selected_question_id or 'NA'}` with {len(expected_answers)} reference answer(s).")
+    else:
+        st.info("No reference answers for current input. This run will show the final answer only (no correctness judgment).")
+
     run_button = st.button("Send", type="primary", use_container_width=True)
 
     trace_placeholder = st.empty()
@@ -418,6 +485,8 @@ def main() -> None:
         with st.spinner("Running episode..."):
             summary = run_episode(
                 question=question,
+                question_id=selected_question_id,
+                expected_answers=expected_answers,
                 topic_entity=topic_entity,
                 max_steps=int(st.session_state["max_steps"]),
                 beam_width=int(st.session_state["beam_width"]),
@@ -445,6 +514,31 @@ def main() -> None:
             a3.metric("Done", str(bool(summary.get("done", False))))
             a4.metric("Graph Adapter", str(summary.get("graph_adapter", "")))
             st.text_area("Final Answer", value=str(summary.get("final_answer", "")), height=100)
+
+            answer_evaluable = bool(summary.get("answer_evaluable", False))
+            answer_hit = summary.get("answer_hit")
+            answer_hit_reason = str(summary.get("answer_hit_reason") or "")
+            expected_from_summary = summary.get("expected_answers") or []
+            if not isinstance(expected_from_summary, list):
+                expected_from_summary = []
+
+            if answer_evaluable:
+                if answer_hit is True:
+                    st.success(f"✅ Correctness: HIT. Matched reference answer: {answer_hit_reason}")
+                else:
+                    st.error(f"❌ Correctness: MISS. Suggested reference answer: {answer_hit_reason}")
+            else:
+                if answer_hit_reason == "missing_expected_answers":
+                    st.info("ℹ️ Correctness: Not evaluable, because no reference answers are provided.")
+                elif answer_hit_reason == "empty_final_answer":
+                    st.info("ℹ️ Correctness: Not evaluable, because final answer is empty.")
+                else:
+                    st.info("ℹ️ Correctness: Not evaluable.")
+
+            if expected_from_summary:
+                with st.expander("Reference Answers (details)", expanded=False):
+                    for idx, expected_answer in enumerate(expected_from_summary, start=1):
+                        st.write(f"{idx}. {expected_answer}")
         else:
             st.error(str(summary.get("error") or "Unknown error"))
     else:
